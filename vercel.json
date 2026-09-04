@@ -1,1 +1,1 @@
-{"rewrites":[{"source":"/api/:path*","destination":"/api?path=:path*"}],"functions":{"api/index.js":{"runtime":"nodejs22.x"}},"headers":[{"source":"/api/(.*)","headers":[{"key":"Cache-Control","value":"no-store"}]}]}
+{"rewrites":[{"source":"/api/:path*","destination":"/api?path=:path*"}],"headers":[{"source":"/api/(.*)","headers":[{"key":"Cache-Control","value":"no-store"}]}]}
