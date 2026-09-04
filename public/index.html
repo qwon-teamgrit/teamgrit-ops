@@ -35,13 +35,25 @@
 
     <section id="projectDetail" class="hidden">
       <span class="back" id="backProjects">← 프로젝트 목록</span>
-      <div class="head"><div><span class="tag blue" id="pCat"></span><h1 id="pName" style="margin-top:8px"></h1><div class="muted">업무 요청과 연결 자료를 함께 보고, 필요한 정보가 부족하면 AI가 먼저 질문한 뒤 결과물을 제안합니다.</div></div><select id="pStatus" class="btn"><option>예정</option><option>진행 중</option><option>검토 대기</option><option>완료</option></select></div>
+      <div class="head">
+        <div class="projectHeading">
+          <span id="pCat" class="hidden"></span>
+          <select id="pCategory" class="categorySelect" aria-label="프로젝트 대분류">
+            <option>행사·마케팅</option>
+            <option>제품·UIUX</option>
+            <option>문서·운영</option>
+            <option>기타</option>
+          </select>
+          <h1 id="pName"></h1>
+          <div class="muted">업무 요청과 연결 자료를 함께 보고, 필요한 정보가 부족하면 AI가 먼저 질문한 뒤 결과물을 제안합니다.</div>
+        </div>
+        <select id="pStatus" class="btn"><option>예정</option><option>진행 중</option><option>검토 대기</option><option>완료</option></select>
+      </div>
 
       <div class="detail">
         <aside class="sidepanel">
           <div class="section"><h3>Google Drive</h3><div id="authBox"></div><div class="field"><label>프로젝트 Drive 폴더 URL</label><input id="driveUrl" placeholder="https://drive.google.com/drive/folders/..."></div><div class="taskActions"><button class="btn" id="saveDrive">Drive 연결 저장</button><button class="btn" id="refreshDrive">기존 자료 불러오기</button></div><div id="driveState" style="margin-top:10px"></div></div>
           <div class="section"><h3>기존 자료</h3><div id="driveFiles" class="files"><div class="empty">Drive를 연결하면 파일이 표시됩니다.</div></div></div>
-          <div class="section"><h3>프로젝트 정보</h3><div class="field"><label>대분류</label><select id="pCategory"><option>행사·마케팅</option><option>제품·UIUX</option><option>문서·운영</option><option>기타</option></select></div></div>
         </aside>
 
         <section class="workspace">
