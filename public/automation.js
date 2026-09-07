@@ -13,10 +13,10 @@
   db.driveSyncLog=db.driveSyncLog||[];
   save();
 
-  function makeAction(type,title,detail,projectId,priority='보통',source='자동 분석',sourceUrl=''){
+  function makeAction(type,title,detail,projectId,priority='보통',source='자동 분석',sourceUrl='',extra={}){
     const key=[type,title,projectId||'',sourceUrl||''].join('|');
     if(db.actionItems.some(x=>x.key===key&&x.status!=='완료')) return null;
-    const item={id:`act_${now()}_${Math.random().toString(36).slice(2,7)}`,key,type,title,detail,projectId:projectId||null,priority,status:'검토 필요',source,sourceUrl,createdAt:now()};
+    const item={id:`act_${now()}_${Math.random().toString(36).slice(2,7)}`,key,type,title,detail,projectId:projectId||null,priority,status:'검토 필요',source,sourceUrl,createdAt:now(),...extra};
     db.actionItems.unshift(item);
     return item;
   }
@@ -61,23 +61,31 @@
   }
 
   function snapshotFiles(files=[]){
-    return files.map(f=>({id:f.id,name:f.name,mimeType:f.mimeType||'',modifiedTime:f.modifiedTime||'',size:f.size||'',webViewLink:f.webViewLink||''})).sort((a,b)=>a.id.localeCompare(b.id));
+    return files.map(f=>({id:f.id,name:f.name,mimeType:f.mimeType||'',modifiedTime:f.modifiedTime||'',size:f.size||'',webViewLink:f.webViewLink||'',contentHash:f.contentHash||'',contentText:f.contentText||''})).sort((a,b)=>a.id.localeCompare(b.id));
   }
   function compareSnapshots(prev=[],next=[]){
     const a=new Map(prev.map(f=>[f.id,f])),b=new Map(next.map(f=>[f.id,f]));
     const added=[],modified=[],removed=[];
-    next.forEach(f=>{const old=a.get(f.id);if(!old)added.push(f);else if(old.modifiedTime!==f.modifiedTime||old.name!==f.name||String(old.size)!==String(f.size))modified.push({before:old,after:f})});
+    next.forEach(f=>{const old=a.get(f.id);if(!old)added.push(f);else if(old.modifiedTime!==f.modifiedTime||old.name!==f.name||String(old.size)!==String(f.size)||((old.contentHash||f.contentHash)&&old.contentHash!==f.contentHash))modified.push({before:old,after:f})});
     prev.forEach(f=>{if(!b.has(f.id))removed.push(f)});
     return {added,modified,removed};
   }
 
+  async function analyzeContentChange(p,pair){
+    const before=pair.before||{},after=pair.after||{};
+    if(!before.contentHash||!after.contentHash||before.contentHash===after.contentHash)return null;
+    try{
+      return await api('/api/drive/change',{method:'POST',body:JSON.stringify({mode:'analyze',projectName:p.name,file:{id:after.id,name:after.name,webViewLink:after.webViewLink},beforeText:before.contentText||'',afterText:after.contentText||''})});
+    }catch(e){return {error:e.message}}
+  }
+
   async function syncDriveSnapshots(){
     const connected=db.projects.filter(p=>p.driveFolderId||p.driveUrl||p.driveFolderUrl);
-    let checked=0,changed=0,baselines=0,errors=0;
+    let checked=0,changed=0,meaningful=0,baselines=0,errors=0;
     for(const p of connected){
       const folder=p.driveFolderId||p.driveUrl||p.driveFolderUrl;
       try{
-        const d=await api('/api/drive/list?folderId='+encodeURIComponent(folder));
+        const d=await api('/api/drive/change',{method:'POST',body:JSON.stringify({mode:'snapshot',folderId:folder})});
         const next=snapshotFiles(d.files||[]),prevRec=db.driveSnapshots[p.id],prev=prevRec?.files||[];
         if(!prevRec){
           db.driveSnapshots[p.id]={projectId:p.id,projectName:p.name,folderId:d.folderId||folder,files:next,capturedAt:now()};
@@ -87,26 +95,38 @@
           const count=diff.added.length+diff.modified.length+diff.removed.length;
           if(count){
             changed+=count;
-            diff.added.forEach(f=>makeAction('Drive 신규 자료',`${p.name} · ${f.name} 추가`,`연결된 Drive 폴더에 새 자료가 추가되었습니다. 프로젝트 요구사항·일정·업무에 영향이 있는지 검토하세요.`,p.id,'보통',f.name,f.webViewLink));
-            diff.modified.forEach(x=>makeAction('Drive 자료 변경',`${p.name} · ${x.after.name} 변경`,`이전 Snapshot 이후 파일이 수정되었습니다. 변경 내용을 다시 분석해 기존 Fact·업무와 비교해야 합니다.`,p.id,'높음',x.after.name,x.after.webViewLink));
-            diff.removed.forEach(f=>makeAction('Drive 자료 삭제',`${p.name} · ${f.name} 삭제`,`이전 Snapshot에는 있었지만 현재 Drive 폴더에서는 확인되지 않습니다. 이동·삭제 여부와 프로젝트 영향도를 확인하세요.`,p.id,'높음',f.name,f.webViewLink));
+            diff.added.forEach(f=>makeAction('Drive 신규 자료',`${p.name} · ${f.name} 추가`,`연결된 Drive 폴더에 새 자료가 추가되었습니다. 프로젝트 요구사항·일정·업무에 영향이 있는지 검토하세요.`,p.id,'보통',f.name,f.webViewLink,{changeKind:'added'}));
+            for(const x of diff.modified){
+              const result=await analyzeContentChange(p,x);
+              if(result?.analysis){
+                const a=result.analysis,changes=a.changes||[],tasks=a.tasks||[];
+                if(changes.length||tasks.length){
+                  meaningful++;
+                  const detail=[a.summary,...changes.slice(0,4).map(c=>`${c.type}: ${c.detail}${c.impact?` (${c.impact})`:''}`)].filter(Boolean).join(' · ');
+                  makeAction('Drive 내용 변경',`${p.name} · ${x.after.name} 의미 있는 변경`,detail||'문서 내용이 변경되었습니다.',p.id,tasks.some(t=>t.priority==='높음')?'높음':'보통',x.after.name,x.after.webViewLink,{changeKind:'content',changes,tasks});
+                  tasks.forEach(t=>makeAction('후속 업무',`${p.name} · ${t.title}`,t.reason||'Drive 변경 분석에서 생성된 후속 업무입니다.',p.id,t.priority||'보통',x.after.name,x.after.webViewLink,{changeKind:'generated-task'}));
+                }else{
+                  makeAction('Drive 자료 변경',`${p.name} · ${x.after.name} 변경`,`파일은 수정됐지만 AI 분석 결과 업무에 영향을 주는 의미 있는 변경은 확인되지 않았습니다.`,p.id,'낮음',x.after.name,x.after.webViewLink,{changeKind:'metadata'});
+                }
+              }else{
+                makeAction('Drive 자료 변경',`${p.name} · ${x.after.name} 변경`,`이전 Snapshot 이후 파일이 수정되었습니다. 변경 내용 분석에 실패했으므로 원본을 확인해 주세요.`,p.id,'높음',x.after.name,x.after.webViewLink,{changeKind:'analysis-error'});
+              }
+            }
+            diff.removed.forEach(f=>makeAction('Drive 자료 삭제',`${p.name} · ${f.name} 삭제`,`이전 Snapshot에는 있었지만 현재 Drive 폴더에서는 확인되지 않습니다. 이동·삭제 여부와 프로젝트 영향도를 확인하세요.`,p.id,'높음',f.name,f.webViewLink,{changeKind:'removed'}));
           }
           db.driveSnapshots[p.id]={projectId:p.id,projectName:p.name,folderId:d.folderId||folder,files:next,capturedAt:now(),previousCapturedAt:prevRec.capturedAt,lastDiff:diff};
         }
         checked++;
-      }catch(e){
-        errors++;
-        db.driveSyncLog.unshift({projectId:p.id,projectName:p.name,at:now(),status:'실패',message:e.message});
-      }
+      }catch(e){errors++;db.driveSyncLog.unshift({projectId:p.id,projectName:p.name,at:now(),status:'실패',message:e.message});}
     }
-    db.driveSyncLog.unshift({at:now(),status:errors?'일부 실패':'완료',checked,changed,baselines,errors});
-    return {checked,changed,baselines,errors};
+    db.driveSyncLog.unshift({at:now(),status:errors?'일부 실패':'완료',checked,changed,meaningful,baselines,errors});
+    return {checked,changed,meaningful,baselines,errors};
   }
 
   async function run(trigger='수동 실행'){
-    const button=$('#runAutomation');if(button){button.disabled=true;button.textContent='Drive 변경 확인 중...'}
+    const button=$('#runAutomation');if(button){button.disabled=true;button.textContent='Drive 내용 비교 중...'}
     const before=db.actionItems.length;
-    let drive={checked:0,changed:0,baselines:0,errors:0};
+    let drive={checked:0,changed:0,meaningful:0,baselines:0,errors:0};
     try{drive=await syncDriveSnapshots()}catch(e){drive.errors++;}
     detectProjectRisks();detectSalesFollowups();detectFactChanges();
     const created=db.actionItems.length-before;
@@ -119,26 +139,13 @@
   function sourceLink(x){return x.sourceUrl?`<a class="source-link" href="${safe(x.sourceUrl)}" target="_blank" rel="noopener noreferrer">↗ 근거 자료 열기</a>`:''}
   function card(x){return `<div class="knowledge-row"><div><div><span class="tag ${x.priority==='높음'?'amber':'blue'}">${safe(x.type)}</span> <span class="tag">${safe(x.priority)}</span></div><b>${safe(x.title)}</b><div>${safe(x.detail)}</div><div class="muted">출처: ${safe(x.source)} · ${new Date(x.createdAt).toLocaleString()}</div>${sourceLink(x)}</div><div class="taskActions"><button class="btn primary" onclick="approveAction('${x.id}')">업무로 승인</button><button class="btn" onclick="completeAction('${x.id}')">완료 처리</button></div></div>`}
 
-  function renderDashAutomation(){
-    if(!$('#automationSummary'))return;const open=db.actionItems.filter(x=>x.status!=='완료');
-    $('#automationSummary').innerHTML=`<div class="ph"><b>자동화 제안</b><span class="muted">실제 Drive Snapshot·프로젝트·영업 상태를 기준으로 생성</span></div><div class="pb">${open.length?open.slice(0,5).map(card).join(''):'<div class="empty">현재 자동 제안이 없습니다.</div>'}</div>`;
-  }
-  function snapshotRows(){
-    const rows=Object.values(db.driveSnapshots||{}).sort((a,b)=>(b.capturedAt||0)-(a.capturedAt||0));
-    return rows.length?rows.map(s=>{const p=db.projects.find(p=>p.id===s.projectId),diff=s.lastDiff||{added:[],modified:[],removed:[]};const changed=diff.added.length+diff.modified.length+diff.removed.length;return `<div class="file"><div><b>${safe(s.projectName||p?.name||'프로젝트')}</b><div class="muted">${s.files.length}개 파일 · 마지막 확인 ${new Date(s.capturedAt).toLocaleString()}</div><div class="source-link-group">${p?.driveUrl?`<a class="source-link" href="${safe(p.driveUrl)}" target="_blank" rel="noopener noreferrer">↗ Drive 폴더 열기</a>`:''}</div></div><span class="tag ${changed?'amber':'green'}">${changed?`변경 ${changed}건`:'변경 없음'}</span></div>`}).join(''):'<div class="empty">Drive가 연결된 프로젝트에서 자동화 실행을 하면 첫 Snapshot이 저장됩니다.</div>';
-  }
-  function renderAutomation(){
-    if(!$('#automationPanel'))return;const open=db.actionItems.filter(x=>x.status!=='완료'),snapshots=Object.keys(db.driveSnapshots||{}).length;
-    $('#automationMetrics').innerHTML=`<div class="metric"><b>${open.length}</b><span class="muted">확인할 자동화 제안</span></div><div class="metric"><b>${open.filter(x=>x.priority==='높음').length}</b><span class="muted">높은 우선순위</span></div><div class="metric"><b>${snapshots}</b><span class="muted">Drive Snapshot 프로젝트</span></div><div class="metric"><b>${db.automationRuns.length}</b><span class="muted">자동화 실행</span></div>`;
-    $('#automationList').innerHTML=open.length?open.map(card).join(''):'<div class="empty">자동화 실행 후 필요한 후속 업무가 표시됩니다.</div>';
-    if($('#driveSnapshotList'))$('#driveSnapshotList').innerHTML=snapshotRows();
-    $('#automationRuns').innerHTML=db.automationRuns.length?db.automationRuns.slice(0,8).map(r=>`<div class="file"><div><b>${safe(r.trigger)}</b><div class="muted">${new Date(r.at).toLocaleString()}${r.drive?` · Drive ${r.drive.checked}개 프로젝트 확인 · 변경 ${r.drive.changed}건 · 최초 기준 ${r.drive.baselines}건`:''}</div></div><span class="tag ${r.status==='완료'?'green':'amber'}">${r.created}건 생성</span></div>`).join(''):'<div class="empty">아직 실행 이력이 없습니다.</div>';
-  }
+  function renderDashAutomation(){if(!$('#automationSummary'))return;const open=db.actionItems.filter(x=>x.status!=='완료');$('#automationSummary').innerHTML=`<div class="ph"><b>자동화 제안</b><span class="muted">실제 Drive 내용 변경·프로젝트·영업 상태를 기준으로 생성</span></div><div class="pb">${open.length?open.slice(0,5).map(card).join(''):'<div class="empty">현재 자동 제안이 없습니다.</div>'}</div>`}
+  function snapshotRows(){const rows=Object.values(db.driveSnapshots||{}).sort((a,b)=>(b.capturedAt||0)-(a.capturedAt||0));return rows.length?rows.map(s=>{const p=db.projects.find(p=>p.id===s.projectId),diff=s.lastDiff||{added:[],modified:[],removed:[]};const changed=diff.added.length+diff.modified.length+diff.removed.length;return `<div class="file"><div><b>${safe(s.projectName||p?.name||'프로젝트')}</b><div class="muted">${s.files.length}개 파일 · 마지막 확인 ${new Date(s.capturedAt).toLocaleString()}</div><div class="source-link-group">${p?.driveUrl?`<a class="source-link" href="${safe(p.driveUrl)}" target="_blank" rel="noopener noreferrer">↗ Drive 폴더 열기</a>`:''}</div></div><span class="tag ${changed?'amber':'green'}">${changed?`변경 ${changed}건`:'변경 없음'}</span></div>`}).join(''):'<div class="empty">Drive가 연결된 프로젝트에서 자동화 실행을 하면 첫 기준본이 저장됩니다.</div>'}
+  function renderAutomation(){if(!$('#automationPanel'))return;const open=db.actionItems.filter(x=>x.status!=='완료'),snapshots=Object.keys(db.driveSnapshots||{}).length;$('#automationMetrics').innerHTML=`<div class="metric"><b>${open.length}</b><span class="muted">확인할 자동화 제안</span></div><div class="metric"><b>${open.filter(x=>x.priority==='높음').length}</b><span class="muted">높은 우선순위</span></div><div class="metric"><b>${snapshots}</b><span class="muted">Drive 기준본 프로젝트</span></div><div class="metric"><b>${db.automationRuns.length}</b><span class="muted">자동화 실행</span></div>`;$('#automationList').innerHTML=open.length?open.map(card).join(''):'<div class="empty">자동화 실행 후 필요한 후속 업무가 표시됩니다.</div>';if($('#driveSnapshotList'))$('#driveSnapshotList').innerHTML=snapshotRows();$('#automationRuns').innerHTML=db.automationRuns.length?db.automationRuns.slice(0,8).map(r=>`<div class="file"><div><b>${safe(r.trigger)}</b><div class="muted">${new Date(r.at).toLocaleString()}${r.drive?` · Drive ${r.drive.checked}개 확인 · 파일 변경 ${r.drive.changed}건 · 의미 있는 변경 ${r.drive.meaningful||0}건 · 최초 기준 ${r.drive.baselines}건`:''}</div></div><span class="tag ${r.status==='완료'?'green':'amber'}">${r.created}건 생성</span></div>`).join(''):'<div class="empty">아직 실행 이력이 없습니다.</div>'}
 
   window.completeAction=id=>{const x=db.actionItems.find(a=>a.id===id);if(!x)return;x.status='완료';x.completedAt=now();save();renderAutomation();renderDashAutomation()};
   window.approveAction=id=>{const x=db.actionItems.find(a=>a.id===id);if(!x)return;x.status='승인됨';x.approvedAt=now();const p=db.projects.find(p=>p.id===x.projectId);if(p){p.generatedTasks=p.generatedTasks||[];p.generatedTasks.unshift({id:`task_${now()}`,title:x.title,status:'예정',source:x.source,sourceUrl:x.sourceUrl||'',createdAt:now()});}save();renderAutomation();renderDashAutomation()};
   window.runOpsAutomation=()=>run('수동 실행');window.renderAutomation=renderAutomation;window.renderDashAutomation=renderDashAutomation;
-
   const baseRenderDash=renderDash;renderDash=function(){baseRenderDash();renderDashAutomation()};
   if($('#navAutomation'))$('#navAutomation').onclick=()=>{['dashboard','projects','knowledge','sales','projectDetail','automationPanel'].forEach(id=>$('#'+id)?.classList.add('hidden'));document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));$('#automationPanel').classList.remove('hidden');$('#navAutomation').classList.add('active');renderAutomation();authStatus()};
   if($('#runAutomation'))$('#runAutomation').onclick=()=>run('수동 실행');
