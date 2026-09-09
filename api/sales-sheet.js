@@ -1,8 +1,9 @@
 const XLSX=require('xlsx');
 const crypto=require('crypto');
+const central=require('./_lib/central-entities');
 
 function parseCookies(req){const raw=req.headers.cookie||'',out={};raw.split(';').forEach(p=>{const i=p.indexOf('=');if(i>-1)out[p.slice(0,i).trim()]=decodeURIComponent(p.slice(i+1).trim())});return out}
-function json(res,status,data){res.statusCode=status;res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(data))}
+function json(res,status,data){res.statusCode=status;res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify(data))}
 async function readBody(req){let s='';for await(const c of req)s+=c;try{return JSON.parse(s||'{}')}catch{return {}}}
 async function refresh(refreshToken){const params=new URLSearchParams({client_id:process.env.GOOGLE_CLIENT_ID||'',client_secret:process.env.GOOGLE_CLIENT_SECRET||'',refresh_token:refreshToken,grant_type:'refresh_token'});const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params});if(!r.ok)throw new Error('Google token refresh failed');return r.json()}
 async function access(req){const c=parseCookies(req);if(c.g_access)return c.g_access;if(!c.g_refresh)return null;return (await refresh(c.g_refresh)).access_token}
@@ -18,11 +19,12 @@ function parseWorkbook(wb){const master=rows(wb.Sheets['고객 마스터']||{}),
   for(const d of distributions){const customerId=clean(d['고객 ID']);if(!customerId)continue;const c=byCustomer.get(customerId);distributionHistory.push({id:uid('distribution',clean(d['배포 ID'])||`${customerId}|${clean(d['자료 ID'])}`),customerId,companyId:c?.id||null,materialId:clean(d['자료 ID']),materialName:clean(d['자료명']),sentAt:clean(d['발송일']),channel:clean(d['발송 채널']),owner:clean(d['담당자']),memo:clean(d['메모']),sourceType:'영업 통합 운영 시트'})}
   return {companies,contacts,followups,distributionHistory,counts:{companies:companies.length,contacts:contacts.length,followups:followups.length,distributionHistory:distributionHistory.length}}}
 function updateMaster(wb,b){const ws=wb.Sheets['고객 마스터'];if(!ws)throw new Error('고객 마스터 시트를 찾을 수 없습니다.');const data=rows(ws),idx=data.findIndex(r=>clean(r['고객 ID'])===clean(b.customerId));if(idx<0)throw new Error('해당 고객 ID를 원본 시트에서 찾을 수 없습니다.');const row={...data[idx]};const map={partner:'파트너사',endCustomer:'최종고객사',customerType:'고객 유형',industry:'산업군',salesTemperature:'영업 온도',accountOwner:'담당 영업',memo:'메모',contactName:'주요 담당자',contactPhone:'담당자 연락처',contactEmail:'담당자 이메일'};for(const [k,col] of Object.entries(map))if(Object.prototype.hasOwnProperty.call(b,k))row[col]=b[k]??'';data[idx]=row;wb.Sheets['고객 마스터']=XLSX.utils.json_to_sheet(data,{header:Object.keys(data[0]||row)});return row}
+async function syncCentralCustomers(token,parsed){const now=new Date().toISOString(),contactByCompany=new Map(parsed.contacts.map(c=>[c.companyId,c]));const out=parsed.companies.map(c=>{const x=contactByCompany.get(c.id)||{};return {customer_id:c.customerId,company_id:c.id,company_name:c.companyName,partner:c.partner,end_customer:c.endCustomer,customer_type:c.customerType,industry:c.industry,sales_temperature:c.salesTemperature,account_owner:c.accountOwner,contact_id:x.id||'',contact_name:x.name||'',contact_email:x.email||'',contact_phone:x.phone||'',source:'영업 통합 운영 시트',last_synced_at:now}});await central.replace(token,'Customers',out);return out.length}
 
 module.exports=async(req,res)=>{try{
   const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const fileId=process.env.SALES_SHEET_FILE_ID||'1MuMAcRqjOeHkwSdU6ZOUjfpUkUE5KLGb',buf=await driveDownload(token,fileId),wb=XLSX.read(buf,{type:'buffer',cellDates:false});
   if(req.method==='POST'){
-    const b=await readBody(req);if(b.action!=='update_customer')return json(res,400,{error:'unsupported_action'});if(!b.customerId)return json(res,400,{error:'customer_id_required'});updateMaster(wb,b);const out=XLSX.write(wb,{type:'buffer',bookType:'xlsx'});await driveUpload(token,fileId,out);return json(res,200,{ok:true,fileId,...parseWorkbook(wb)});
+    const b=await readBody(req);if(b.action!=='update_customer')return json(res,400,{error:'unsupported_action'});if(!b.customerId)return json(res,400,{error:'customer_id_required'});updateMaster(wb,b);const out=XLSX.write(wb,{type:'buffer',bookType:'xlsx'});await driveUpload(token,fileId,out);const parsed=parseWorkbook(wb),centralCustomers=await syncCentralCustomers(token,parsed);return json(res,200,{ok:true,fileId,centralCustomers,...parsed});
   }
-  return json(res,200,{fileId,...parseWorkbook(wb)});
+  const parsed=parseWorkbook(wb),centralCustomers=await syncCentralCustomers(token,parsed);return json(res,200,{fileId,centralCustomers,...parsed});
 }catch(e){return json(res,500,{error:e.message})}}
