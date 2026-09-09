@@ -15,13 +15,17 @@ async function access(req,res){const cookies=parseCookies(req);if(cookies.g_acce
 async function google(token,url,options={}){const response=await fetch(url,{...options,headers:{Authorization:`Bearer ${token}`,...(options.headers||{})}});if(!response.ok){const detail=await response.text();throw new Error(`Google API ${response.status}: ${detail.slice(0,500)}`)}if(response.status===204)return null;return response.json()}
 function q(value){return String(value).replace(/'/g,"\\'")}
 async function findStorage(token){const query=encodeURIComponent(`mimeType='application/vnd.google-apps.spreadsheet' and appProperties has { key='teamgritOps' and value='${APP_KEY}' } and trashed=false`);const result=await google(token,`https://www.googleapis.com/drive/v3/files?q=${query}&pageSize=1&fields=files(id,name,webViewLink,modifiedTime)`);return result.files?.[0]||null}
-async function createStorage(token){const file=await google(token,'https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:FILE_NAME,mimeType:'application/vnd.google-apps.spreadsheet',appProperties:{teamgritOps:APP_KEY}})});const spreadsheet=await google(token,`https://sheets.googleapis.com/v4/spreadsheets/${file.id}?fields=sheets.properties`);const firstId=spreadsheet.sheets?.[0]?.properties?.sheetId;
-  const requests=[];
-  if(firstId!==undefined)requests.push({updateSheetProperties:{properties:{sheetId:firstId,title:STATE_SHEET,hidden:true},fields:'title,hidden'}});
-  requests.push({addSheet:{properties:{title:PROJECTS_SHEET}}},{addSheet:{properties:{title:EXECUTIONS_SHEET}}});
-  await google(token,`https://sheets.googleapis.com/v4/spreadsheets/${file.id}:batchUpdate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requests})});
+async function ensureStorage(token,file){const spreadsheet=await google(token,`https://sheets.googleapis.com/v4/spreadsheets/${file.id}?fields=sheets.properties`),sheets=spreadsheet.sheets||[],titles=new Set(sheets.map(s=>s.properties?.title)),requests=[];
+  if(!titles.has(PROJECTS_SHEET))requests.push({addSheet:{properties:{title:PROJECTS_SHEET}}});
+  if(!titles.has(EXECUTIONS_SHEET))requests.push({addSheet:{properties:{title:EXECUTIONS_SHEET}}});
+  const state=sheets.find(s=>s.properties?.title===STATE_SHEET),candidate=sheets.find(s=>![PROJECTS_SHEET,EXECUTIONS_SHEET].includes(s.properties?.title));
+  if(state)requests.push({updateSheetProperties:{properties:{sheetId:state.properties.sheetId,hidden:true},fields:'hidden'}});
+  else if(candidate)requests.push({updateSheetProperties:{properties:{sheetId:candidate.properties.sheetId,title:STATE_SHEET,hidden:true},fields:'title,hidden'}});
+  else requests.push({addSheet:{properties:{title:STATE_SHEET,hidden:true}}});
+  if(requests.length)await google(token,`https://sheets.googleapis.com/v4/spreadsheets/${file.id}:batchUpdate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requests})});
   return {...file,webViewLink:file.webViewLink||`https://docs.google.com/spreadsheets/d/${file.id}/edit`};
 }
+async function createStorage(token){const file=await google(token,'https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:FILE_NAME,mimeType:'application/vnd.google-apps.spreadsheet',appProperties:{teamgritOps:APP_KEY}})});return ensureStorage(token,file)}
 async function readState(token,file){const range=encodeURIComponent(`'${STATE_SHEET}'!A:B`);const values=await google(token,`https://sheets.googleapis.com/v4/spreadsheets/${file.id}/values/${range}`);const rows=values.values||[];const revision=rows.find(r=>r[0]==='revision')?.[1]||null;const chunks=rows.filter(r=>/^chunk_\d+$/.test(r[0]||'')).sort((a,b)=>Number(a[0].slice(6))-Number(b[0].slice(6))).map(r=>r[1]||'');if(!chunks.length)return {state:null,revision};try{return {state:JSON.parse(chunks.join('')),revision}}catch{throw new Error('central_state_invalid')}
 }
 function projectRows(state){return [['project_id','name','category','status','drive_url','figma_url','updated_at'],...(state.projects||[]).map(p=>[p.id||'',p.name||'',p.category||'',p.status||'',p.driveUrl||'',p.figmaUrl||'',p.updatedAt||state.updatedAt||''])]}
@@ -32,7 +36,7 @@ async function writeState(token,file,state,revision){const serialized=JSON.strin
 
 module.exports=async(req,res)=>{try{
   const token=await access(req,res);if(!token)return json(res,401,{error:'google_not_connected'});
-  let storage=await findStorage(token);
+  let storage=await findStorage(token);if(storage)storage=await ensureStorage(token,storage);
   if(req.method==='GET'){
     if(!storage)return json(res,200,{state:null,revision:null,storage:null});
     const current=await readState(token,storage);return json(res,200,{...current,storage});
