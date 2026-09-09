@@ -7,8 +7,8 @@
     el.style.display='block';
     el.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><span class="tag ${error?'amber':done?'green':'blue'}">${error?'중단':done?'완료':'진행 중'}</span><b>${title}</b></div>${detail?`<div class="muted" style="margin-top:6px">${detail}</div>`:''}${!done&&!error?'<div style="height:6px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:10px"><div style="height:100%;width:35%;background:#1967d2;border-radius:999px;animation:tgSync 1.2s ease-in-out infinite alternate"></div></div>':''}`;
   }
-  async function call(url,payload){
-    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{}),cache:'no-store'});
+  async function call(action,payload){
+    const r=await fetch('/api/live-data?action='+encodeURIComponent(action),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{}),cache:'no-store'});
     const d=await r.json().catch(()=>({}));
     if(!r.ok||!d.ok)throw new Error(d.error||`HTTP ${r.status}`);
     return d;
@@ -20,7 +20,7 @@
     let processed=0,total=0,projectUpdates=0;
     try{
       status('변경 원본 확인 중','기존 중앙 원본과 Drive 최신 수정 시각을 비교합니다.');
-      const start=await call('/api/live-sync?action=start',{});
+      const start=await call('sync-start',{});
       let queue=start.queue||[];total=start.total||queue.length;
       if(!queue.length){
         status('최신 상태입니다','마지막 동기화 이후 변경된 연결 원본이 없습니다.',true,false);
@@ -29,7 +29,7 @@
       }
       while(queue.length){
         status(`변경 원본 동기화 중 · ${Math.min(processed,total)}/${total}`,`한 번에 최대 20개씩 처리합니다. 이번 동기화 대상은 최대 ${start.limit||400}개입니다.`);
-        const step=await call('/api/live-sync?action=step',{queue});
+        const step=await call('sync-step',{queue});
         processed+=step.processed||0;projectUpdates+=step.projectUpdates||0;queue=step.remaining||[];
         total=Math.max(total,processed+queue.length);
       }
@@ -49,6 +49,8 @@
       running=false;if(b)b.disabled=false;
     }
   }
+  window.runIncrementalSync=run;
+  try{syncProjectSources=async()=>run()}catch{}
   function bind(){
     const b=q('#syncProjects');if(!b||b.dataset.incrementalBound)return;
     b.dataset.incrementalBound='1';
