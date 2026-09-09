@@ -25,6 +25,14 @@
 - Re-entering a project should not resurrect old result links from localStorage/project state.
 - The actual generated files remain in Google Drive and therefore appear under Existing files.
 
+## Central operations state
+- After Google connection, the app creates or reuses `TeamGRIT Ops 운영 데이터` in the connected account.
+- The Google Sheet is the source of truth for project state and execution-log metadata.
+- Browser localStorage is only a cache and a one-time migration source when no central sheet exists.
+- The readable `Projects` and `Executions` tabs mirror the canonical JSON stored in the hidden `_State` tab.
+- A revision conflict must stop automatic overwrite and ask the user to reload.
+- Generated document contents and temporary uploads are not copied into the central state.
+
 ## Visual system
 - TeamGRIT Ops itself: Google Material Design 3.
 - Do not apply CoBiz UI design system to TeamGRIT Ops.
