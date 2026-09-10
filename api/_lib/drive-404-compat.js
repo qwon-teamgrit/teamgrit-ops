@@ -4,6 +4,11 @@ module.exports=function installDrive404Compat(){
   if(typeof originalFetch!=='function')return;
   global.fetch=async function(input,init){
     let url=typeof input==='string'?input:input?.url;
+    if(typeof url==='string'&&url.includes('https://www.googleapis.com/drive/v3/files?')&&/fields=files\([^)]*$/.test(url)){
+      url+=')';
+      if(typeof input==='string')input=url;
+      else if(input instanceof Request)input=new Request(url,input);
+    }
     const r=await originalFetch(input,init);
     if(r.status===404 && typeof url==='string' && /https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[^?]+\?fields=/.test(url)){
       const m=url.match(/\/drive\/v3\/files\/([^?]+)/);
