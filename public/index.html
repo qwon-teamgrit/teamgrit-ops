@@ -3,7 +3,47 @@
 <!-- production-source: main-drive-sync-v7-work-controls -->
 <body><div class="shell"><aside class="side"><div class="brand" aria-label="TeamGRIT"><img class="brand-full" src="/assets/teamgrit-logo-horizontal.svg" alt="TeamGRIT"><img class="brand-symbol" src="/assets/teamgrit-logo-symbol.svg" alt="TeamGRIT"></div><div class="nav"><button id="navDash" class="active">대시보드</button><button id="navProjects">프로젝트</button><button id="navWork">업무</button><button id="navSales">영업</button><button id="navAutomation">자동화</button></div></aside>
 <main class="main">
-<section id="dashboard"><div class="head"><div><h1>대시보드</h1><div class="muted">TeamGRIT Ops 운영 데이터에 저장된 중앙 업무 현황입니다. 같은 Google 계정으로 연결하면 다른 브라우저에서도 동일한 데이터를 확인합니다.</div></div><div id="authTop"></div></div><div id="dashSources" class="taskActions" style="margin-bottom:14px"></div><div class="metrics" id="metrics"></div><div class="panel"><div class="ph"><b>프로젝트 진행 상황</b><span class="muted">2026년 팀그릿 업무진행·시스템개발팀·연결 자료에서 추출한 중앙 프로젝트</span></div><div class="pb" id="dashProjects"></div></div><div class="panel"><div class="ph"><b>등록 업무</b><span class="muted">사용자가 승인해 중앙 업무표에 등록한 업무</span></div><div class="pb" id="dashTasks"></div></div></section>
+<section id="dashboard">
+  <div class="dashboard-head">
+    <div>
+      <div class="agent-eyebrow"><span class="agent-spark" aria-hidden="true">✦</span> TEAMGRIT WORK AGENT</div>
+      <h1>대시보드</h1>
+      <div class="muted dashboard-description">프로젝트·업무·영업·자동화 현황을 한 화면에서 확인하고, 연결된 원본을 기준으로 다음 업무를 준비합니다.</div>
+    </div>
+    <div id="authTop"></div>
+  </div>
+
+  <div class="agent-overview">
+    <div class="agent-overview-copy">
+      <div class="agent-symbol" aria-hidden="true">✦</div>
+      <div>
+        <span class="agent-label">업무 에이전트</span>
+        <h2>기존 업무 기능을 그대로 활용해<br>확인과 실행 흐름을 연결합니다.</h2>
+        <p>원본 자료를 확인하고 업무 후보를 제안하며, 사용자가 승인한 항목만 중앙 업무표에 등록합니다.</p>
+        <div class="agent-capabilities" aria-label="지원 기능">
+          <span>원본 자료 연결</span><span>프로젝트 현황</span><span>업무 후보 생성</span><span>승인 후 등록</span><span>실행 이력</span>
+        </div>
+      </div>
+    </div>
+    <div class="agent-source-card">
+      <div class="agent-source-title"><span class="status-dot" aria-hidden="true"></span><b>연결 및 동기화 상태</b></div>
+      <div id="dashSources" class="taskActions"></div>
+    </div>
+  </div>
+
+  <div class="dashboard-section-head">
+    <div><h2>전체 운영 현황</h2><p>현재 중앙 데이터에 등록된 주요 항목입니다.</p></div>
+  </div>
+  <div class="metrics" id="metrics"></div>
+
+  <div class="dashboard-section-head dashboard-content-head">
+    <div><h2>업무 현황</h2><p>기존 프로젝트와 승인된 업무를 그대로 확인할 수 있습니다.</p></div>
+  </div>
+  <div class="dashboard-panels">
+    <div class="panel dashboard-panel"><div class="ph"><div><b>프로젝트 진행 상황</b><small>연결 자료에서 추출한 중앙 프로젝트</small></div><span class="section-kicker">PROJECTS</span></div><div class="pb" id="dashProjects"></div></div>
+    <div class="panel dashboard-panel"><div class="ph"><div><b>등록 업무</b><small>사용자가 승인해 중앙 업무표에 등록한 업무</small></div><span class="section-kicker">TASKS</span></div><div class="pb" id="dashTasks"></div></div>
+  </div>
+</section>
 <section id="projects" class="hidden"><div class="head"><div><h1>프로젝트</h1><div class="muted">Projects 시트는 원본이 아니라 중앙 캐시/DB입니다. 동기화 시 마지막 동기화 이후 변경된 원본을 우선 확인하고, 최대 400개 범위에서 20개씩 나누어 갱신합니다.</div><div id="projectSourceState" style="margin-top:8px"></div></div><button class="btn primary" id="syncProjects">최신 변경분 동기화</button></div><div class="panel"><div class="ph"><b>원본 연결·읽기 현황</b><span class="muted">전체 읽음 / 일부 읽음 / 연결 안 됨을 구분합니다.</span></div><div class="pb" id="sourceOverview"></div></div><div class="panel"><div class="pb"><div class="tabs" id="catTabs"></div><div id="projectList" style="margin-top:12px"></div></div></div></section>
 <section id="work" class="hidden"><div class="head"><div><h1>업무</h1><div class="muted">회의·업무 메모를 최신 실제 회사 원본과 대조해 후보로 만들고, 승인한 항목만 중앙 Tasks에 등록합니다.</div><div id="workSourceState" style="margin-top:8px"></div></div></div><div class="panel"><div class="pb"><div class="field"><label>회의 / 업무 메모</label><textarea id="workMemo" placeholder="예: 오늘 회의에서 서울로봇쇼 리플렛 수정본을 SBA에 전달하기로 했고, 장비 연결 여부는 개발팀 확인이 필요함"></textarea></div><div class="taskActions"><button class="btn primary" id="analyzeMemo">AI 업무 후보 생성</button><span class="muted" id="workModel"></span></div></div></div><div class="panel"><div class="ph"><b>업무 후보 검토</b><span class="muted">AI가 모르는 담당자·기한·프로젝트는 임의로 채우지 않습니다.</span></div><div class="pb"><div id="workCandidates"><div class="empty">메모를 분석하면 후보가 표시됩니다.</div></div><div class="taskActions" style="margin-top:12px"><button class="btn primary" id="registerApproved">승인한 업무 등록</button></div></div></div><div class="panel"><div class="ph"><b>중앙 업무표</b><span class="muted">승인 후 TeamGRIT Ops 운영 데이터에 등록된 실제 업무</span></div><div class="pb" id="registeredTasks"></div></div></section>
 <section id="sales" class="hidden"><div class="head"><div><h1>영업</h1><div class="muted">기업·담당자·후속 액션은 실제 영업 통합 운영 시트에서만 불러옵니다.</div><div id="salesSourceState" style="margin-top:8px"></div></div></div><div class="metrics" id="salesMetrics"></div><div class="panel"><div class="ph"><b>기업 / 고객</b><span class="muted">실제 고객 마스터</span></div><div class="pb" id="companyList"></div></div><div class="panel"><div class="ph"><b>Contact</b><span class="muted">실제 고객 마스터 담당자 정보</span></div><div class="pb" id="contactList"></div></div><div class="panel"><div class="ph"><b>후속 액션</b><span class="muted">실제 영업 시트의 후속 액션</span></div><div class="pb" id="followupList"></div></div></section>
