@@ -1,0 +1,14 @@
+[project]
+name = "teamgrit-work-agent"
+version = "0.1.0"
+description = "TeamGRIT Ops evidence-backed work planning agent"
+requires-python = ">=3.11"
+dependencies = [
+  "google-adk>=2.2.0",
+  "google-genai>=1.30.0",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.34.0",
+]
+
+[tool.uv]
+dev-dependencies = []

@@ -1,0 +1,7 @@
+name: teamgrit-work-agent
+agent_directory: app
+region: asia-northeast3
+create_params:
+  agent: adk
+  deployment_target: none
+  prototype: true
