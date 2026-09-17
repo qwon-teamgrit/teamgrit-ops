@@ -4,7 +4,8 @@ const SCHEMA={
   Approvals:['approval_id','target_type','target_id','action','status','requested_at','approved_by','approved_at','source','note'],
   Customers:['customer_id','company_id','company_name','partner','end_customer','customer_type','industry','sales_temperature','account_owner','contact_id','contact_name','contact_email','contact_phone','source','last_synced_at'],
   ProductFacts:['fact_id','project_id','subject','fact','source_ids','evidence','verification_status','last_synced_at'],
-  Results:['result_id','project_id','task_id','execution_id','type','title','file_url','status','created_at']
+  Results:['result_id','project_id','task_id','execution_id','type','title','file_url','status','created_at'],
+  Notifications:['notification_id','task_id','project','type','message','result_url','status','approved_by','approved_at','created_at']
 };
 const clean=v=>v==null?'':String(v).trim();
 const id=(prefix,key)=>`${prefix}_${crypto.createHash('sha1').update(String(key)).digest('hex').slice(0,14)}`;
@@ -17,4 +18,5 @@ async function append(token,name,objects){if(!objects.length)return 0;await ensu
 async function userEmail(token){try{return clean((await gf(token,'https://www.googleapis.com/oauth2/v2/userinfo')).email)}catch{return ''}}
 function approval({targetType,targetId,action='승인',status='승인됨',approvedBy='',source='',note=''}){const now=new Date().toISOString();return {approval_id:id('approval',`${targetType}|${targetId}|${action}|${now}`),target_type:targetType,target_id:targetId,action,status,requested_at:now,approved_by:approvedBy,approved_at:status==='승인됨'?now:'',source,note}}
 function result({projectId='',taskId='',executionId='',type='',title='',fileUrl='',status='완료'}){const now=new Date().toISOString();return {result_id:id('result',`${projectId}|${taskId}|${executionId}|${fileUrl||title}|${now}`),project_id:projectId,task_id:taskId,execution_id:executionId,type,title,file_url:fileUrl,status,created_at:now}}
-module.exports={OPS_SHEET_ID,SCHEMA,clean,id,ensure,list,replace,append,userEmail,approval,result};
+function notification({taskId='',project='',type='내부 알림',message='',resultUrl='',status='발송됨',approvedBy=''}){const now=new Date().toISOString();return {notification_id:id('notification',`${taskId}|${type}|${now}`),task_id:taskId,project,type,message,result_url:resultUrl,status,approved_by:approvedBy,approved_at:approvedBy?now:'',created_at:now}}
+module.exports={OPS_SHEET_ID,SCHEMA,clean,id,ensure,list,replace,append,userEmail,approval,result,notification};
