@@ -16,4 +16,5 @@
   if(!document.querySelector('script[src="/agent-ui.js"]')){const s=document.createElement('script');s.src='/agent-ui.js';s.async=false;document.body.appendChild(s)}
   if(!document.querySelector('link[href="/phase2-ui.css"]')){const l=document.createElement('link');l.rel='stylesheet';l.href='/phase2-ui.css';document.head.appendChild(l)}
   if(!document.querySelector('script[src="/phase2-ui.js"]')){const s=document.createElement('script');s.src='/phase2-ui.js';s.async=false;document.body.appendChild(s)}
+  if(!document.querySelector('script[src="/result-review.js"]')){const s=document.createElement('script');s.src='/result-review.js';s.async=false;document.body.appendChild(s)}
 })();
