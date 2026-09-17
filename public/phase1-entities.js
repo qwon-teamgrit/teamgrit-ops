@@ -14,4 +14,6 @@
   renderDash=function(){originalRenderDash();const el=$('#dashSources');if(!el)return;const central=`<span class="tag blue">중앙 구조</span><span class="muted"> Projects ${db.projects.length} · Tasks ${db.tasks.length} · Approvals ${db.approvals.length} · Customers ${db.customers.length} · ProductFacts ${db.productFacts.length} · Results ${db.results.length} · Executions ${db.executions.length}</span>`;if(!el.querySelector('[data-phase1]'))el.insertAdjacentHTML('beforeend',`<span data-phase1 style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${central}</span>`);else el.querySelector('[data-phase1]').innerHTML=central};
   if(!document.querySelector('link[href="/agent-ui.css"]')){const l=document.createElement('link');l.rel='stylesheet';l.href='/agent-ui.css';document.head.appendChild(l)}
   if(!document.querySelector('script[src="/agent-ui.js"]')){const s=document.createElement('script');s.src='/agent-ui.js';s.async=false;document.body.appendChild(s)}
+  if(!document.querySelector('link[href="/phase2-ui.css"]')){const l=document.createElement('link');l.rel='stylesheet';l.href='/phase2-ui.css';document.head.appendChild(l)}
+  if(!document.querySelector('script[src="/phase2-ui.js"]')){const s=document.createElement('script');s.src='/phase2-ui.js';s.async=false;document.body.appendChild(s)}
 })();
