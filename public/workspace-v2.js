@@ -59,31 +59,49 @@
     fillSelect(q('#projectStatusFilter'),unique(db.projects.map(p=>p.status)),'모든 상태',ui.projectStatus);
     ui.projectCategory=q('#projectCategoryFilter')?.value||'전체';ui.projectStatus=q('#projectStatusFilter')?.value||'전체';
   }
+  function workProjectSkip(t){
+    const p=clean(t.project),title=clean(t.title),evidence=clean(t.origin_detail||t.evidence||'');
+    return /^(출장\/외근|출장|외근|회의실)$/i.test(p)||/(^|>)\s*(출장\/외근|출장|외근|회의실)\s*(>|$)/i.test(evidence)||/^(출장\/외근|회의실)\b/i.test(title);
+  }
+  function manualProjectMap(){
+    return new Map((window.TG_PROJECT_ALIAS_ROWS||[]).map(x=>[norm(x.alias_name),clean(x.canonical_name)]).filter(x=>x[0]&&x[1]));
+  }
+  function autoProjectCanonical(raw,title,rawNames,manual){
+    const key=norm(raw);if(manual.has(key))return manual.get(key);
+    const text=norm(raw+' '+title),self=clean(raw);
+    const candidates=rawNames.filter(n=>{
+      const nk=norm(n);if(!nk||nk===key||nk.length<4)return false;
+      if(manual.has(nk)&&norm(manual.get(nk))===nk)return false;
+      return key.startsWith(nk)||text.startsWith(nk)||key.includes(nk);
+    }).sort((a,b)=>norm(b).length-norm(a).length);
+    return candidates[0]||self;
+  }
   renderProjects=function(){
-    projectFilters();
-    const search=norm(ui.projectSearch),tasks=visibleWorkTasks().filter(t=>clean(t.project)&&clean(t.project)!=='확인 필요');
+    const search=norm(ui.projectSearch),tasks=visibleWorkTasks().filter(t=>clean(t.project)&&clean(t.project)!=='확인 필요'&&!workProjectSkip(t));
     window.TG_PROJECT_ALIASES={};window.TG_WORKLOG_PROJECTS={};
-    const groups=new Map();
+    const manual=manualProjectMap(),rawNames=[...new Set(tasks.map(t=>clean(t.project)).filter(Boolean))],groups=new Map();
     for(const t of tasks){
-      const key=norm(t.project);if(!key)continue;
-      if(!groups.has(key))groups.set(key,{name:clean(t.project),tasks:[]});
-      groups.get(key).tasks.push(t);
+      const canonical=autoProjectCanonical(t.project,t.title,rawNames,manual),key=norm(canonical);if(!key)continue;
+      if(!groups.has(key))groups.set(key,{name:canonical,tasks:[],aliases:new Set()});
+      const g=groups.get(key);g.tasks.push(t);g.aliases.add(clean(t.project));
     }
     const all=[...groups.values()].map(g=>{
-      const exact=(db.projects||[]).find(p=>norm(p.name)===norm(g.name));
+      const exact=(db.projects||[]).find(p=>norm(p.name)===norm(g.name))||(db.projects||[]).find(p=>[...g.aliases].some(a=>norm(p.name)===norm(a)));
       const id=exact?.id||('worklog_'+encodeURIComponent(norm(g.name)));
-      const p={...(exact||{}),id,name:g.name,category:exact?.category||'업무일지',status:exact?.status||'진행 중',customer:exact?.customer||'',sources:exact?.sources||[],_worklogTasks:g.tasks,_aliases:[g.name]};
-      window.TG_PROJECT_ALIASES[id]=[g.name];window.TG_WORKLOG_PROJECTS[id]=p;return p;
+      const p={...(exact||{}),id,name:g.name,category:exact?.category||'업무일지',status:exact?.status||'진행 중',customer:exact?.customer||'',sources:exact?.sources||[],_worklogTasks:g.tasks,_aliases:[...g.aliases]};
+      window.TG_PROJECT_ALIASES[id]=p._aliases;window.TG_WORKLOG_PROJECTS[id]=p;return p;
     });
+    const categories=['전체',...unique(all.map(p=>p.category))],statuses=['전체',...unique(all.map(p=>p.status))];
+    fillSelect(q('#projectCategoryFilter'),categories.slice(1),'모든 분류',ui.projectCategory);fillSelect(q('#projectStatusFilter'),statuses.slice(1),'모든 상태',ui.projectStatus);
+    ui.projectCategory=q('#projectCategoryFilter')?.value||'전체';ui.projectStatus=q('#projectStatusFilter')?.value||'전체';
     const filtered=all.filter(p=>{
-      const pt=p._worklogTasks||[],people=pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).join(' '),titles=pt.map(t=>t.title).join(' ');
-      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
+      const pt=p._worklogTasks||[],people=pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).join(' '),titles=pt.map(t=>t.title).join(' '),aliases=(p._aliases||[]).join(' ');
+      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${aliases} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
     });
     const active=all.filter(p=>!doneStates.includes(clean(p.status))).length,review=all.filter(p=>/검토|확인/.test(clean(p.status))||!clean(p.category)).length,connected=all.filter(p=>(p.sources||[]).length||p.driveFolderId||p.driveUrl||p.connectionStatus==='연결됨').length;
     q('#projectMetrics').innerHTML=`<div class="metric"><b>${all.length}</b><span class="muted">최근 1달 프로젝트·대분류</span></div><div class="metric priority"><b>${active}</b><span class="muted">진행 중</span></div><div class="metric review"><b>${review}</b><span class="muted">검토 필요</span></div><div class="metric good"><b>${connected}</b><span class="muted">연결 원본 있음</span></div>`;
-    q('#projectSourceState').innerHTML=`${sourceState(connection.tasks,'최근 30일 업무일지')} <span class="muted">프로젝트·담당자는 2026년 팀그릿 업무진행 계층을 기준으로 구성</span>`;
-    const cats=['전체',...unique(all.map(p=>p.category)).slice(0,5)];
-    q('#catTabs').innerHTML=cats.map(x=>`<button data-cat="${esc(x)}" class="${x===ui.projectCategory?'active':''}">${esc(x)}</button>`).join('');
+    q('#projectSourceState').innerHTML=`${sourceState(connection.tasks,'최근 30일 업무일지')} <span class="muted">출장/외근·회의실 제외 · 동일 키워드 업무 자동 병합 · 수동 편집 우선</span>`;
+    q('#catTabs').innerHTML=categories.slice(0,6).map(x=>`<button data-cat="${esc(x)}" class="${x===ui.projectCategory?'active':''}">${esc(x)}</button>`).join('');
     const perPage=24,totalPages=Math.max(1,Math.ceil(filtered.length/perPage));if(ui.projectPage>totalPages)ui.projectPage=totalPages;
     const pageItems=filtered.slice((ui.projectPage-1)*perPage,ui.projectPage*perPage);
     q('#projectResultCount').textContent=`${filtered.length}개 프로젝트·대분류 · ${ui.projectPage}/${totalPages} 페이지`;
