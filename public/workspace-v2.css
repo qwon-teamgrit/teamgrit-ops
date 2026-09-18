@@ -186,3 +186,21 @@ body{background:#f5f7fa;color:var(--tg-ink)}
 .project-pagination .btn[disabled]{opacity:.45;cursor:not-allowed}
 @media (max-width:1100px){.project-bento-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:720px){.project-bento-grid{grid-template-columns:1fr}}
+
+/* Full project worklog history */
+.project-history-summary{display:flex;align-items:center;gap:4px;padding:0 0 12px;font-size:12px}
+.project-history-grid{align-items:start}
+.history-task{padding:12px 13px;border-bottom:1px solid #edf0f4;background:#fff}
+.history-task:last-child{border-bottom:0}
+.history-task-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.history-task-head>div{display:grid;gap:3px;min-width:0}
+.history-task-head strong{font-size:12px;line-height:1.45;color:#27364a}
+.history-task-head small{font-size:10px;color:#7b8798}
+.history-task-path{margin-top:7px;font-size:10px;line-height:1.45;color:#667085}
+.history-links{display:grid;gap:7px;margin-top:9px}
+.history-link-row{padding:8px 9px;border:1px solid #edf0f4;border-radius:8px;background:#fafbfc}
+.history-link-row>a{font-size:10px;font-weight:700;color:var(--tg-blue)}
+.history-link-row details{margin-top:6px}
+.history-link-row summary{cursor:pointer;font-size:10px;color:#667085}
+.history-link-row iframe{width:100%;height:260px;margin-top:8px;border:1px solid #e6eaf0;border-radius:8px;background:#fff}
+@media(max-width:760px){.history-link-row iframe{height:210px}}
