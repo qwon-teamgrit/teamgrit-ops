@@ -131,6 +131,20 @@ function parsePrimaryTasksDeterministic(sectionText){
   }
   return dedupePrimaryTasks(tasks);
 }
+function projectTokens(v=''){return [...new Set(norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','진행','운영','관련','기타'].includes(x)))]}
+function canonicalProjectName(raw,title,projects){
+  const a=norm(raw),combined=[...projectTokens(raw),...projectTokens(title)];
+  let best='',score=0;
+  for(const p of projects||[]){
+    const name=clean(p.name);if(!name)continue;
+    const n=norm(name);if(a&&a===n)return name;
+    const pt=projectTokens(name);let s=0;
+    for(const t of pt){if(combined.includes(t))s+=3;else if(combined.some(x=>x.includes(t)||t.includes(x)))s+=1}
+    if(a&&(a.includes(n)||n.includes(a)))s+=4;
+    if(s>score){score=s;best=name}
+  }
+  return score>=3?best:(clean(raw)||'확인 필요');
+}
 function dedupePrimaryTasks(tasks){
   const out=[];
   for(const t of tasks){
@@ -180,6 +194,7 @@ url=https://docs.google.com/document/d/${WORK_DOC_ID}/edit
 
 [LINKED_DRIVE_CONTEXT]
 ${linked.text||'연결 Drive 본문 없음'}`;
+  const canonicalProjects=await central.list(token,'Projects').catch(()=>[]);
   let ai=null,extracted=[],fallbackUsed=false,fallbackReason='';
   try{
     ai=await gemini(prompt);
@@ -187,6 +202,8 @@ ${linked.text||'연결 Drive 본문 없음'}`;
     extracted=dedupePrimaryTasks(extracted);
   }catch(e){fallbackUsed=true;fallbackReason=String(e?.message||e)}
   if(!extracted.length){fallbackUsed=true;extracted=parsePrimaryTasksDeterministic(week.text)}
+  extracted=extracted.map(t=>({...t,project:canonicalProjectName(t.project,t.title,canonicalProjects)}));
+  extracted=dedupePrimaryTasks(extracted);
   if(!extracted.length)return json(res,502,{error:'primary_work_task_extract_empty',week:week.key,fallbackReason});
   const raw=await sheetRows(token,'Tasks','A1:U5000'),existingById=new Map(raw.map(t=>[clean(t.task_id),t])),preserved=raw.filter(t=>clean(t.origin_type)!=='2026년 팀그릿 업무진행'),now=new Date().toISOString(),mainId=sourceId(mainSource)||'main_work_doc';
   const managed=extracted.map(t=>{
