@@ -3,7 +3,10 @@ const OPS_SHEET_ID=process.env.OPS_DATA_SHEET_ID||'1Gfs2mC9_b7_u7sGIDC74WD-GUTLJ
 const SCHEMA={
   Approvals:['approval_id','target_type','target_id','action','status','requested_at','approved_by','approved_at','source','note'],
   Customers:['customer_id','company_id','company_name','partner','end_customer','customer_type','industry','sales_temperature','account_owner','contact_id','contact_name','contact_email','contact_phone','source','last_synced_at'],
-  ProductFacts:['fact_id','project_id','subject','fact','source_ids','evidence','verification_status','last_synced_at'],
+  ProductFacts:['fact_id','project_id','subject','fact','source_ids','evidence','verification_status','last_synced_at','feature_name','description','applied_entities','development_status','evidence_docs','verified_by','verified_at','public_status'],
+  FactCandidates:['candidate_id','fact_id','project_id','feature_name','description','applied_entities','development_status','evidence_docs','source_ids','evidence','change_type','dev_site_status','dev_site_evidence','status','created_at','reviewed_by','reviewed_at','public_status'],
+  MarketingCandidates:['content_id','week_key','title','angle','source_fact_ids','source_project_ids','rationale','required_assets','missing_checks','status','created_at','approved_by','approved_at'],
+  MarketingDrafts:['draft_id','content_id','channel','title','body','required_assets','missing_checks','status','created_at','approved_by','approved_at'],
   Results:['result_id','project_id','task_id','execution_id','type','title','file_url','status','created_at','content','review_status','approved_by','approved_at','updated_at','source_task_id','artifact_kind','artifact_data','executor_status'],
   Notifications:['notification_id','task_id','project','type','message','result_url','status','approved_by','approved_at','created_at'],
   ReviewRequests:['review_id','target_type','target_id','task_id','project','title','status','requested_by','requested_at','reviewed_by','reviewed_at','note']
