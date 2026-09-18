@@ -20,8 +20,7 @@
     <div class="nav-label">업무 운영</div>
     <div class="nav">
       <button id="navDash" class="active"><span class="nav-icon">⌂</span><span>대시보드</span></button>
-      <button id="navProjects"><span class="nav-icon">▦</span><span>프로젝트</span></button>
-      <button id="navWork"><span class="nav-icon">✓</span><span>업무 처리</span><span id="navWorkCount" class="nav-count hidden">0</span></button>
+      <button id="navProjects"><span class="nav-icon">▦</span><span>프로젝트 · 업무</span><span id="navWorkCount" class="nav-count hidden">0</span></button>
     </div>
     <div class="nav-label nav-label-sub">참고 정보</div>
     <div class="nav">
@@ -50,13 +49,13 @@
 
     <section id="projects" class="hidden">
       <div class="head page-head">
-        <div><div class="eyebrow">PROJECTS</div><h1>프로젝트</h1><div class="muted">프로젝트의 상태와 연결 자료를 찾고, 상세 화면에서 맥락과 실행을 관리합니다.</div><div id="projectSourceState" class="inline-state"></div></div>
+        <div><div class="eyebrow">PROJECT WORKSPACE</div><h1>프로젝트 · 업무</h1><div class="muted">프로젝트를 중심으로 들어가 담당자별 업무와 연결 자료를 함께 관리합니다.</div><div id="projectSourceState" class="inline-state"></div></div>
         <button class="btn primary" id="syncProjects">최신 변경분 동기화</button>
       </div>
       <div class="metrics compact-metrics" id="projectMetrics"></div>
       <div class="panel project-list-panel">
         <div class="filterbar">
-          <label class="searchbox"><span>⌕</span><input id="projectSearch" type="search" placeholder="프로젝트명·고객 검색"></label>
+          <label class="searchbox"><span>⌕</span><input id="projectSearch" type="search" placeholder="프로젝트명·고객·담당자·업무 검색"></label>
           <select id="projectCategoryFilter" aria-label="프로젝트 분류"><option value="전체">모든 분류</option></select>
           <select id="projectStatusFilter" aria-label="프로젝트 상태"><option value="전체">모든 상태</option></select>
           <button class="btn filter-reset" id="projectFilterReset">초기화</button>
@@ -108,7 +107,7 @@
     </section>
 
     <section id="projectDetail" class="hidden">
-      <button class="back" id="backProjects">← 프로젝트 목록</button>
+      <button class="back" id="backProjects">← 프로젝트 · 업무</button>
       <div class="head project-detail-head"><div><span class="tag blue" id="pCat"></span><h1 id="pName"></h1><div class="muted">프로젝트 정보와 연결 자료를 확인하고, AI 실행은 별도 탭에서 검토 후 진행합니다.</div><div id="projectCentralState" class="inline-state"></div></div><div class="status-control"><label for="pStatus">프로젝트 상태</label><select id="pStatus" class="btn"></select></div></div>
       <div class="project-tabs" id="projectTabs"><button class="active" data-project-tab="overview">개요</button><button data-project-tab="files">연결 자료</button><button data-project-tab="ai">AI 실행</button></div>
 
