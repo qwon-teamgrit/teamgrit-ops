@@ -42,10 +42,11 @@ async function approveFact(token,b){
 }
 function weekKey(){const d=new Date(),a=new Date(d.getFullYear(),0,1),w=Math.ceil((((d-a)/86400000)+a.getDay()+1)/7);return d.getFullYear()+'-W'+String(w).padStart(2,'0')}
 async function generateMarketing(token){
-  const [facts,projects,sources,existing]=await Promise.all([
+  const [facts,projects,sources,tasks,existing]=await Promise.all([
     central.list(token,'ProductFacts'),
     sheetRows(token,'Projects'),
     sheetRows(token,'Sources'),
+    sheetRows(token,'Tasks','A1:U5000'),
     central.list(token,'MarketingCandidates')
   ]);
   const cutoff=Date.now()-30*24*60*60*1000;
@@ -62,7 +63,17 @@ async function generateMarketing(token){
       && !/취소|폐기|중단/i.test(status)
       && clean(p.source_ids||p.source_evidence);
   });
-  const eligibleProjects=[...new Map([...completed,...eventProjects].map(p=>[clean(p.project_id),p])).values()];
+  const worklogTasks=tasks.filter(t=>clean(t.origin_type)==='2026년 팀그릿 업무진행');
+  const promoRe=/서울.*로봇|로봇쇼|행사|전시|워크숍|세미나|챌린지|시연|고객|방문|poc|실증|납품|마케팅|sns|보도자료|메일링|홍보|제작물|팜플렛|리플렛|초청|체험|영업|제안/i;
+  const promoTasks=worklogTasks.filter(t=>promoRe.test(clean(t.project)+' '+clean(t.title)));
+  const pTokens=v=>norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','운영','관련'].includes(x));
+  const projectForTask=t=>{
+    const raw=norm(t.project),tt=pTokens(t.project);let best=null,score=0;
+    for(const p of recentProjects){const pn=norm(p.name),pt=pTokens(p.name);if(raw&&raw===pn)return p;let s=pt.filter(x=>tt.includes(x)).length*3;if(raw&&(raw.includes(pn)||pn.includes(raw)))s+=4;if(s>score){score=s;best=p}}
+    return score>=3?best:null;
+  };
+  const worklogProjects=promoTasks.map(projectForTask).filter(Boolean);
+  const eligibleProjects=[...new Map([...completed,...eventProjects,...worklogProjects].map(p=>[clean(p.project_id),p])).values()];
   if(!approved.length&&!eligibleProjects.length)throw new Error('recent_30d_approved_facts_or_marketing_projects_required');
 
   const prompt=[
@@ -72,7 +83,9 @@ async function generateMarketing(token){
     '행사/프로젝트가 예정 또는 진행 중이면 완료 성과처럼 표현하지 말고 현재 상태를 그대로 쓴다.',
     '제공되지 않은 성능 수치, 고객 성과, 일정, 참가 확정, 인용문은 만들지 않는다.',
     '사진, 행사 일정 최종 확인, 고객명 공개 동의, 수치 등이 필요하면 requiredAssets 또는 missingChecks에 명시한다.',
-    '기술 소재와 이벤트 소재가 한쪽으로 치우치지 않도록 최대 8개 제안한다.',
+    '최대 8개를 제안한다. 최근 30일 업무일지에 행사·전시·시연·마케팅·고객 접점·납품·실증·홍보 업무가 있으면 그 소재를 우선 포함한다.',
+    '이벤트/현장/사업/마케팅 근거가 충분하면 최소 3개는 비기술 소재로 구성하고, 순수 기능·기술 업데이트 소재는 전체의 절반을 넘기지 않는다.',
+    '단순히 기능명을 나열하는 소재보다 "최근 무엇이 진행되었고 외부에 왜 알릴 가치가 있는지"가 분명한 소재를 우선한다.',
     '아래 [최근 생성된 소재 제목]과 실질적으로 같은 소재나 같은 각도는 반복하지 않는다. 같은 근거를 쓰더라도 새로 추가된 최근 30일 근거가 있을 때만 다른 각도로 제안한다.',
     'factIds/projectIds에는 제공된 ID만 사용한다.',
     'JSON만 반환: {"candidates":[{"title":string,"angle":string,"factIds":[string],"projectIds":[string],"rationale":string,"requiredAssets":[string],"missingChecks":[string]}]}.',
@@ -83,13 +96,16 @@ async function generateMarketing(token){
     '[최근 30일 내 홍보 가능한 프로젝트·이벤트]',
     ...eligibleProjects.slice(0,80).map(p=>'[PROJECT '+p.project_id+'] '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | '+p.summary+' | 상태:'+(p.manual_status||p.source_status)+' | 근거:'+p.source_evidence),
     '',
+    '[최근 30일 업무일지의 행사·마케팅·고객 접점 업무]',
+    ...promoTasks.slice(0,80).map(t=>'- '+clean(t.owner)+' | '+clean(t.project)+' | '+clean(t.title)+' | '+clean(t.origin_detail)),
+    '',
     '[최근 생성된 소재 제목 - 중복 방지]',
     ...existing.filter(e=>(Date.parse(clean(e.created_at))||0)>=cutoff).slice(-40).map(e=>'- '+e.title+' | '+e.angle)
   ].join('\n');
 
   const ai=await gemini(prompt),vf=new Set(approved.map(f=>clean(f.fact_id))),vp=new Set(eligibleProjects.map(p=>clean(p.project_id))),now=new Date().toISOString(),wk=weekKey(),
     rows=arr(ai.data?.candidates).map(x=>{const fs=arr(x.factIds).map(clean).filter(id=>vf.has(id)),ps=arr(x.projectIds).map(clean).filter(id=>vp.has(id));return {content_id:central.id('content',wk+'|'+clean(x.title)+'|'+fs.join(',')+'|'+ps.join(',')),week_key:wk,title:clean(x.title),angle:clean(x.angle),source_fact_ids:fs.join(','),source_project_ids:ps.join(','),rationale:clean(x.rationale),required_assets:arr(x.requiredAssets).map(clean).filter(Boolean).join(' | '),missing_checks:arr(x.missingChecks).map(clean).filter(Boolean).join(' | '),status:'후보',created_at:now,approved_by:'',approved_at:''}}).filter(x=>x.title&&(x.source_fact_ids||x.source_project_ids));
-  await central.replace(token,'MarketingCandidates',[...existing.filter(e=>clean(e.week_key)!==wk||clean(e.status)==='승인됨'),...rows]);
+  await central.replace(token,'MarketingCandidates',[...existing.filter(e=>clean(e.week_key)!==wk||['승인됨','삭제됨'].includes(clean(e.status))),...rows]);
   return {week:wk,candidates:rows,modelUsed:ai.modelUsed,approvedFacts:approved.length,completedProjects:completed.length,eventProjects:eventProjects.length,windowDays:30}
 }
 async function approveMarketing(token,b){const rows=await central.list(token,'MarketingCandidates'),i=rows.findIndex(x=>clean(x.content_id)===clean(b.content_id));if(i<0)throw new Error('marketing_candidate_not_found');const reviewer=await central.userEmail(token),now=new Date().toISOString();rows[i]={...rows[i],status:'승인됨',approved_by:reviewer,approved_at:now};await central.replace(token,'MarketingCandidates',rows);await central.append(token,'Approvals',[central.approval({targetType:'MarketingCandidate',targetId:rows[i].content_id,action:'홍보 소재 승인',approvedBy:reviewer,source:'3차 마케팅 검토',note:rows[i].title})]);return rows[i]}
@@ -163,10 +179,11 @@ async function deleteMarketingCandidate(token,b){
   const id=clean(b.content_id);if(!id)throw new Error('content_id_required');
   const [rows,drafts,approvals]=await Promise.all([central.list(token,'MarketingCandidates'),central.list(token,'MarketingDrafts'),central.list(token,'Approvals')]);
   const found=rows.find(x=>clean(x.content_id)===id);if(!found)throw new Error('marketing_candidate_not_found');
-  await central.replace(token,'MarketingCandidates',rows.filter(x=>clean(x.content_id)!==id));
+  const removedDrafts=drafts.filter(x=>clean(x.content_id)===id);
+  await central.replace(token,'MarketingCandidates',rows.map(x=>clean(x.content_id)===id?{...x,status:'삭제됨',approved_by:'',approved_at:''}:x));
   await central.replace(token,'MarketingDrafts',drafts.filter(x=>clean(x.content_id)!==id));
-  await central.replace(token,'Approvals',approvals.filter(x=>!(clean(x.target_type)==='MarketingCandidate'&&clean(x.target_id)===id)&&!(clean(x.target_type)==='MarketingDraft'&&drafts.some(d=>clean(d.content_id)===id&&clean(d.draft_id)===clean(x.target_id)))));
-  return {deleted:id,title:found.title}
+  await central.replace(token,'Approvals',approvals.filter(x=>!(clean(x.target_type)==='MarketingCandidate'&&clean(x.target_id)===id)&&!(clean(x.target_type)==='MarketingDraft'&&removedDrafts.some(d=>clean(d.draft_id)===clean(x.target_id)))));
+  return {deleted:id,title:found.title,deletedDrafts:removedDrafts.length}
 }
 async function deleteMarketingDraft(token,b){
   const id=clean(b.draft_id);if(!id)throw new Error('draft_id_required');
@@ -178,12 +195,17 @@ async function deleteMarketingDraft(token,b){
 }
 async function deleteProductFact(token,b){
   const id=clean(b.fact_id);if(!id)throw new Error('fact_id_required');
-  const [facts,approvals,candidates]=await Promise.all([central.list(token,'ProductFacts'),central.list(token,'Approvals'),central.list(token,'FactCandidates')]);
+  const [facts,approvals,candidates,marketing,drafts]=await Promise.all([central.list(token,'ProductFacts'),central.list(token,'Approvals'),central.list(token,'FactCandidates'),central.list(token,'MarketingCandidates'),central.list(token,'MarketingDrafts')]);
   const found=facts.find(x=>clean(x.fact_id)===id);if(!found)throw new Error('product_fact_not_found');
   await central.replace(token,'ProductFacts',facts.filter(x=>clean(x.fact_id)!==id));
   await central.replace(token,'Approvals',approvals.filter(x=>!(clean(x.target_type)==='ProductFact'&&clean(x.target_id)===id)));
   await central.replace(token,'FactCandidates',candidates.map(x=>clean(x.fact_id)===id?{...x,status:'검토 대기',reviewed_by:'',reviewed_at:''}:x));
-  return {deleted:id,title:found.feature_name||found.subject}
+  const affected=marketing.filter(x=>ids(x.source_fact_ids).includes(id)).map(x=>clean(x.content_id));
+  if(affected.length){
+    await central.replace(token,'MarketingCandidates',marketing.map(x=>affected.includes(clean(x.content_id))?{...x,status:'삭제됨',approved_by:'',approved_at:''}:x));
+    await central.replace(token,'MarketingDrafts',drafts.filter(x=>!affected.includes(clean(x.content_id))));
+  }
+  return {deleted:id,title:found.feature_name||found.subject,deletedMarketing:affected.length}
 }
 async function attachEntities(token,payload){const x=await central.listMany(token,['Approvals','Customers','ProductFacts','Results','FactCandidates','MarketingCandidates','MarketingDrafts']);payload.entities={approvals:x.Approvals||[],customers:x.Customers||[],productFacts:x.ProductFacts||[],results:x.Results||[],factCandidates:x.FactCandidates||[],marketingCandidates:x.MarketingCandidates||[],marketingDrafts:x.MarketingDrafts||[]};if(payload.data)payload.data.entities=payload.entities;return payload}
 
