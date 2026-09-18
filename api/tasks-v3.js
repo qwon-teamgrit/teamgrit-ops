@@ -33,9 +33,9 @@ function buildFocusedContext(memo,projects,facts,sources,tasks){
   const wanted=new Set();
   for(const x of rankedProjects)for(const id of projectSourceIds(x.item))wanted.add(id);
   for(const x of rankedFacts)for(const id of factSourceIds(x.item))wanted.add(id);
-  const rankedSources=rank(memo,sources,sourceText,25,.02);
+  const rankedSources=rank(memo,sources,sourceText,40,.015).sort((a,b)=>{const ar=clean(a.item.root_source||a.item.rootSource)==='2026년 팀그릿 업무진행'?0:1,br=clean(b.item.root_source||b.item.rootSource)==='2026년 팀그릿 업무진행'?0:1;return ar-br||b.score-a.score});
   for(const x of rankedSources)wanted.add(sourceId(x.item));
-  const relatedSources=sources.filter(s=>wanted.has(sourceId(s))).slice(0,40);
+  const relatedSources=sources.filter(s=>wanted.has(sourceId(s))).sort((a,b)=>{const ar=clean(a.root_source||a.rootSource)==='2026년 팀그릿 업무진행'?0:1,br=clean(b.root_source||b.rootSource)==='2026년 팀그릿 업무진행'?0:1;return ar-br}).slice(0,60);
   const relatedTasks=rank(memo,tasks,t=>[t.title,t.project,t.owner,t.source].map(clean).join(' '),60,.015).map(x=>x.item);
   const lines=[];
   for(const x of rankedProjects)lines.push(`[PROJECT] ${clean(x.item.name)} | score:${x.score.toFixed(3)} | 고객:${clean(x.item.customer)} | 상태:${clean(x.item.manual_status||x.item.source_status)} | 분류:${clean(x.item.manual_category||x.item.source_category)} | 요약:${clean(x.item.summary)} | 근거:${clean(x.item.source_evidence||x.item.evidence)} | sourceIds:${projectSourceIds(x.item).join(',')}`);
@@ -47,14 +47,14 @@ function buildFocusedContext(memo,projects,facts,sources,tasks){
 async function context(token,memo){const [projects,facts,sources,tasks]=await Promise.all([central.list(token,'Projects').catch(()=>[]),central.list(token,'ProductFacts').catch(()=>[]),sheetRows(token,'Sources','A1:O5000'),sheetRows(token,'Tasks','A1:U5000')]);const validIds=new Set(sources.map(sourceId).filter(Boolean)),focused=buildFocusedContext(memo,projects,facts,sources,tasks);return {projects,facts,sources,tasks,validIds,sourceById:sourceMap(sources),focused,totalSourceCount:sources.length,existingTaskCount:tasks.length}}
 async function detailedSourceContext(token,task,ctx){
   const preferred=new Set(ids(task.source_ids||task.sourceIds));
-  const ordered=[...ctx.focused.relatedSources].sort((a,b)=>Number(preferred.has(sourceId(b)))-Number(preferred.has(sourceId(a))));
+  const ordered=[...ctx.focused.relatedSources].sort((a,b)=>{const ap=preferred.has(sourceId(a))?0:1,bp=preferred.has(sourceId(b))?0:1;if(ap!==bp)return ap-bp;const ar=clean(a.root_source||a.rootSource)==='2026년 팀그릿 업무진행'?0:1,br=clean(b.root_source||b.rootSource)==='2026년 팀그릿 업무진행'?0:1;return ar-br});
   const chunks=[];let used=0;
-  for(const s of ordered.slice(0,8)){
+  for(const s of ordered.slice(0,12)){
     const fileId=clean(s.file_id||s.fileId),mimeType=clean(s.mime_type||s.mimeType);
     if(!fileId||!mimeType||mimeType==='application/vnd.google-apps.folder')continue;
     try{
       const r=await readFile(token,{id:fileId,mimeType,name:sourceTitle(s)});
-      const body=clean(r?.text).slice(0,24000);
+      const body=clean(r?.text).slice(0,30000);
       if(!body)continue;
       chunks.push(`<SOURCE_BODY id="${sourceId(s)}" title="${sourceTitle(s)}">
 ${body}
