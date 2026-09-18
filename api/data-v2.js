@@ -236,7 +236,22 @@ async function deleteProductFact(token,b){
   }
   return {deleted:id,title:found.feature_name||found.subject,deletedMarketing:affected.length}
 }
-async function attachEntities(token,payload){const x=await central.listMany(token,['Approvals','Customers','ProductFacts','Results','FactCandidates','MarketingCandidates','MarketingDrafts']);payload.entities={approvals:x.Approvals||[],customers:x.Customers||[],productFacts:x.ProductFacts||[],results:x.Results||[],factCandidates:x.FactCandidates||[],marketingCandidates:x.MarketingCandidates||[],marketingDrafts:x.MarketingDrafts||[]};if(payload.data)payload.data.entities=payload.entities;return payload}
+async function saveProjectAlias(token,b){
+  const alias=clean(b.alias_name),canonical=clean(b.canonical_name);if(!alias||!canonical)throw new Error('alias_and_canonical_required');
+  const rows=await central.list(token,'ProjectAliases'),now=new Date().toISOString(),by=await central.userEmail(token),id=central.id('palias',norm(alias)),i=rows.findIndex(x=>norm(x.alias_name)===norm(alias));
+  const row={alias_id:id,alias_name:alias,canonical_name:canonical,updated_by:by,updated_at:now};
+  if(i>=0)rows[i]=row;else rows.push(row);await central.replace(token,'ProjectAliases',rows);return row
+}
+async function saveProjectAliasBulk(token,b){
+  const canonical=clean(b.canonical_name),aliases=arr(b.aliases).map(clean).filter(Boolean);if(!canonical||!aliases.length)throw new Error('canonical_and_aliases_required');
+  const rows=await central.list(token,'ProjectAliases'),now=new Date().toISOString(),by=await central.userEmail(token),map=new Map(rows.map(x=>[norm(x.alias_name),x]));
+  for(const alias of aliases)map.set(norm(alias),{alias_id:central.id('palias',norm(alias)),alias_name:alias,canonical_name:canonical,updated_by:by,updated_at:now});
+  await central.replace(token,'ProjectAliases',[...map.values()]);return {canonical_name:canonical,aliases}
+}
+async function deleteProjectAlias(token,b){
+  const alias=clean(b.alias_name);if(!alias)throw new Error('alias_required');const rows=await central.list(token,'ProjectAliases'),kept=rows.filter(x=>norm(x.alias_name)!==norm(alias));await central.replace(token,'ProjectAliases',kept);return {deleted:alias}
+}
+async function attachEntities(token,payload){const x=await central.listMany(token,['Approvals','Customers','ProductFacts','Results','FactCandidates','MarketingCandidates','MarketingDrafts','ProjectAliases']);payload.entities={approvals:x.Approvals||[],customers:x.Customers||[],productFacts:x.ProductFacts||[],results:x.Results||[],factCandidates:x.FactCandidates||[],marketingCandidates:x.MarketingCandidates||[],marketingDrafts:x.MarketingDrafts||[],projectAliases:x.ProjectAliases||[]};if(payload.data)payload.data.entities=payload.entities;return payload}
 
 module.exports=async(req,res)=>{try{
   const token=await access(req).catch(()=>null),u=new URL(req.url,'https://'+req.headers.host),action=u.searchParams.get('action')||'bootstrap';
@@ -251,5 +266,8 @@ module.exports=async(req,res)=>{try{
   if(token&&req.method==='POST'&&action==='phase3-delete-all-marketing')return json(res,200,{ok:true,...await deleteAllMarketing(token)});
   if(token&&req.method==='POST'&&action==='phase3-delete-draft')return json(res,200,{ok:true,...await deleteMarketingDraft(token,await body(req))});
   if(token&&req.method==='POST'&&action==='phase3-delete-fact')return json(res,200,{ok:true,...await deleteProductFact(token,await body(req))});
+  if(token&&req.method==='POST'&&action==='project-alias-save')return json(res,200,{ok:true,alias:await saveProjectAlias(token,await body(req))});
+  if(token&&req.method==='POST'&&action==='project-alias-bulk')return json(res,200,{ok:true,...await saveProjectAliasBulk(token,await body(req))});
+  if(token&&req.method==='POST'&&action==='project-alias-delete')return json(res,200,{ok:true,...await deleteProjectAlias(token,await body(req))});
   const temp=fakeResponse();await original(req,temp);let payload={};try{payload=JSON.parse(temp.body||'{}')}catch{payload={raw:temp.body}}if(token&&temp.statusCode<400)await attachEntities(token,payload);res.statusCode=temp.statusCode;for(const [k,v] of Object.entries(temp.headers))res.setHeader(k,v);res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify(payload));
 }catch(e){return json(res,500,{error:e.message,connection:'연결 안 됨'})}};
