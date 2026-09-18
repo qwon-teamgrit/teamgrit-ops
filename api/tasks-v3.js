@@ -113,32 +113,34 @@ async function primaryLinkedContext(token,section){
   return {text:chunks.join('\\n').slice(0,120000),sources:used};
 }
 
-function parsePrimaryTasksDeterministic(sectionText){
+function parseWorklogStructure(sectionText){
   const personNames=new Set(['김기령','강성일','임양성','김규원','백승윤','유하은','정해수','이재원','장재훈','박종현','김태성','태성','강민우','김승종']);
   const rows=String(sectionText||'').split(/\r?\n/).map((line,i)=>{const m=line.match(/^(\s*)\*\s+(.*)$/);return m?{i,indent:m[1].length,text:clean(m[2])}:null}).filter(Boolean);
-  const tasks=[];let owner='',mode='',modeIndent=-1;const stack=[];
+  const tasks=[],pairs=new Set();let owner='',ownerIndent=-1;const stack=[];
   const doneRe=/(완료됨|완료\.?$|확인 완료|전달 완료|발송 완료|송부 완료|주문 완료|수령 완료)/;
-  const skipRe=/^(진행사항|계획사항|주간 업무내용|사업본부|개발본부|공지사항|회의실|출장\/외근|휴가)/;
+  const globalSkip=/^(주간 업무내용|사업본부|개발본부|시스템 개발팀|서비스 개발팀|컨텐츠 개발팀|선행기술 개발팀|공지사항|회의실|출장\/외근|휴가)/;
+  const modeRe=/^(진행사항|계획사항)$/;
   for(let i=0;i<rows.length;i++){
     const r=rows[i],next=rows[i+1],nextIndent=next?next.indent:-1;
     while(stack.length&&stack[stack.length-1].indent>=r.indent)stack.pop();
     const base=clean(r.text.split(/[\[(]/)[0]);
-    if(personNames.has(base)){owner=base;mode='';modeIndent=-1;stack.length=0;continue}
-    if(!owner)continue;
-    if(r.text==='진행사항'||r.text==='계획사항'){mode=r.text;modeIndent=r.indent;stack.length=0;continue}
-    if(!mode||r.indent<=modeIndent)continue;
-    if(skipRe.test(r.text))continue;
+    if(personNames.has(base)){owner=base;ownerIndent=r.indent;stack.length=0;continue}
+    if(!owner||r.indent<=ownerIndent)continue;
+    if(globalSkip.test(r.text))continue;
+    const path=[...stack.map(x=>x.text),r.text],meaningful=path.filter(x=>!modeRe.test(x));
+    const project=clean((meaningful[0]||'').replace(/^\((.*?)\)$/,'$1').replace(/\s*\(.*?\)\s*/g,' '))||'확인 필요';
+    if(project!=='확인 필요')pairs.add(norm(owner)+'|'+norm(project));
     const hasChild=nextIndent>r.indent;
     if(hasChild){stack.push({indent:r.indent,text:r.text});continue}
+    if(modeRe.test(r.text)||r.text.length<3)continue;
+    const mode=path.find(x=>modeRe.test(x))||'';
     if(doneRe.test(r.text)&&mode==='진행사항')continue;
-    const parent=stack.length?stack[stack.length-1].text:'';
-    const project=clean((stack[0]?.text||parent).replace(/\s*\(.*?\)\s*/g,' '))||'확인 필요';
-    const title=r.text;
-    if(title.length<3)continue;
-    tasks.push({title,project,owner,dueDate:'',status:mode==='계획사항'?'예정':'진행 중',evidence:`${owner} > ${mode}${parent?' > '+parent:''} > ${title}`,sourceIds:[]});
+    tasks.push({title:r.text,project,owner,dueDate:'',status:mode==='계획사항'?'예정':'진행 중',evidence:`${owner} > ${path.join(' > ')}`,sourceIds:[]});
   }
-  return dedupePrimaryTasks(tasks);
+  return {tasks:dedupePrimaryTasks(tasks),pairs};
 }
+function parsePrimaryTasksDeterministic(sectionText){return parseWorklogStructure(sectionText).tasks}
+
 function projectTokens(v=''){return [...new Set(norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','진행','운영','관련','기타'].includes(x)))]}
 function canonicalProjectName(raw,_title,projects){
   const a=norm(raw);if(!a||a==='확인 필요')return '확인 필요';
@@ -207,18 +209,17 @@ url=https://docs.google.com/document/d/${WORK_DOC_ID}/edit
 ${linked.text||'연결 Drive 본문 없음'}`;
   const canonicalProjects=await central.list(token,'Projects').catch(()=>[]);
   let ai=null,extracted=[],fallbackUsed=false,fallbackReason='';
-  const deterministic=parsePrimaryTasksDeterministic(week.text);
+  const structure=parseWorklogStructure(week.text),deterministic=structure.tasks;
   try{
     ai=await gemini(prompt);
     extracted=arr(ai.data?.tasks).map(t=>({title:clean(t.title),project:clean(t.project),owner:clean(t.owner),dueDate:clean(t.dueDate),status:clean(t.status)||'예정',evidence:clean(t.evidence),sourceIds:arr(t.sourceIds).map(clean).filter(x=>x==='main_work_doc'||validIds.has(x))})).filter(t=>t.title&&t.owner);
   }catch(e){fallbackUsed=true;fallbackReason=String(e?.message||e)}
-  if(deterministic.length){
-    const exactKeys=new Set(deterministic.map(t=>norm(t.owner)+'|'+norm(t.project)+'|'+norm(t.title)));
-    const safeAi=extracted.filter(t=>deterministic.some(d=>norm(d.owner)===norm(t.owner)&&norm(d.project)===norm(t.project)&&(taskSimilarity(d.title,t.title)>=.55||norm(d.title).includes(norm(t.title))||norm(t.title).includes(norm(d.title)))));
-    extracted=dedupePrimaryTasks([...deterministic,...safeAi.filter(t=>!exactKeys.has(norm(t.owner)+'|'+norm(t.project)+'|'+norm(t.title)))]);
+  const safeAi=extracted.filter(t=>structure.pairs.has(norm(t.owner)+'|'+norm(t.project)));
+  if(deterministic.length||safeAi.length){
+    extracted=dedupePrimaryTasks([...deterministic,...safeAi]);
   } else {
     fallbackUsed=true;
-    extracted=dedupePrimaryTasks(extracted);
+    extracted=[];
   }
   extracted=extracted.map(t=>({...t,project:canonicalProjectName(t.project,t.title,canonicalProjects)}));
   extracted=dedupePrimaryTasks(extracted);
