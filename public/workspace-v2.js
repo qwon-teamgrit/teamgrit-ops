@@ -61,9 +61,17 @@
   }
   renderProjects=function(){
     projectFilters();
-    const raw=db.projects||[],all=mergeProjectCards(raw),search=norm(ui.projectSearch);
+    const raw=db.projects||[],search=norm(ui.projectSearch);
     window.TG_PROJECT_ALIASES=window.TG_PROJECT_ALIASES||{};
-    const projectTasks=p=>{const aliases=new Set((p._aliases||[p.name]).map(norm));return visibleWorkTasks().filter(t=>aliases.has(norm(t.project)))};
+    const projectTasks=p=>{
+      const aliases=(p._aliases||[p.name]).map(norm),ptokens=[...new Set(aliases.flatMap(projectNameTokens))];
+      return visibleWorkTasks().filter(t=>{
+        const tp=norm(t.project),tt=projectNameTokens(t.project);
+        if(aliases.includes(tp))return true;
+        return ptokens.some(a=>tt.some(b=>a===b||(a.length>=3&&b.length>=3&&(a.includes(b)||b.includes(a)))));
+      });
+    };
+    const all=mergeProjectCards(raw).filter(p=>projectTasks(p).length>0);
     const filtered=all.filter(p=>{
       const pt=projectTasks(p),people=pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).join(' '),titles=pt.map(t=>t.title).join(' '),aliases=(p._aliases||[]).join(' ');
       return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${aliases} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
