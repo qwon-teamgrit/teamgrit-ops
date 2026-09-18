@@ -9,6 +9,8 @@
   const isDone=t=>doneStates.includes(clean(t?.status));
   const needsReview=t=>['', '확인 필요'].includes(clean(t?.owner))||['','확인 필요'].includes(clean(t?.due_date||t?.dueDate))||/검토|확인/.test(clean(t?.status));
   const taskId=t=>clean(t?.task_id||t?.id);
+  const isVisibleWorkTask=t=>['2026년 팀그릿 업무진행','AI 메모 추출','후속 업무','수동 등록'].includes(clean(t?.origin_type));
+  const visibleWorkTasks=()=> (db.tasks||[]).filter(isVisibleWorkTask);
   const taskDue=t=>clean(t?.due_date||t?.dueDate);
   const todayStart=()=>{const d=new Date();d.setHours(0,0,0,0);return d.getTime()};
   const dueTime=t=>{const v=taskDue(t);if(!v||v==='확인 필요')return Infinity;const n=Date.parse(v);return Number.isFinite(n)?n:Infinity};
@@ -22,7 +24,7 @@
   function unique(values){return [...new Set(values.map(clean).filter(v=>v&&v!=='확인 필요'))].sort((a,b)=>a.localeCompare(b,'ko'))}
   function fillSelect(el,values,allLabel,current){if(!el)return;const selected=current||el.value||'전체';el.innerHTML=`<option value="전체">${esc(allLabel)}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');el.value=values.includes(selected)?selected:'전체'}
   function empty(message){return `<div class="empty">${esc(message)}</div>`}
-  function setNavCount(){const count=db.tasks.filter(t=>!isDone(t)).length,el=q('#navWorkCount');if(!el)return;el.textContent=count;el.classList.toggle('hidden',count===0)}
+  function setNavCount(){const count=visibleWorkTasks().filter(t=>!isDone(t)).length,el=q('#navWorkCount');if(!el)return;el.textContent=count;el.classList.toggle('hidden',count===0)}
 
   renderDash=function(){
     const projects=db.projects||[],tasks=db.tasks||[],active=projects.filter(p=>!doneStates.includes(clean(p.status))),open=tasks.filter(t=>!isDone(t)),review=open.filter(needsReview),late=open.filter(isOverdue);
@@ -58,16 +60,16 @@
 
   function taskMatchesTab(t){if(ui.workTab==='done')return isDone(t);if(ui.workTab==='review')return !isDone(t)&&needsReview(t);return !isDone(t)}
   function taskFilters(){
-    fillSelect(q('#taskProjectFilter'),unique(db.tasks.map(t=>t.project)),'모든 프로젝트',ui.taskProject);
-    fillSelect(q('#taskOwnerFilter'),unique(db.tasks.map(t=>t.owner)),'모든 담당자',ui.taskOwner);
-    fillSelect(q('#taskStatusFilter'),unique(db.tasks.map(t=>t.status)),'모든 상태',ui.taskStatus);
+    fillSelect(q('#taskProjectFilter'),unique(visibleWorkTasks().map(t=>t.project)),'모든 프로젝트',ui.taskProject);
+    fillSelect(q('#taskOwnerFilter'),unique(visibleWorkTasks().map(t=>t.owner)),'모든 담당자',ui.taskOwner);
+    fillSelect(q('#taskStatusFilter'),unique(visibleWorkTasks().map(t=>t.status)),'모든 상태',ui.taskStatus);
     ui.taskProject=q('#taskProjectFilter')?.value||'전체';ui.taskOwner=q('#taskOwnerFilter')?.value||'전체';ui.taskStatus=q('#taskStatusFilter')?.value||'전체';
   }
   function statusOptions(value){return [...new Set([value,...taskStates].filter(Boolean))].map(v=>`<option ${v===value?'selected':''}>${esc(v)}</option>`).join('')}
   function taskRows(tasks){return tasks.map(t=>`<div class="task-row" data-task-row="${esc(taskId(t))}"><div class="task-main"><button class="task-title-btn" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">${esc(t.title||'이름 없는 업무')}</button><span class="task-source">${esc(t.origin_type||t.source||'기존 중앙 업무')}</span>${t.duplicate_of?`<span class="tag amber">중복 의심</span>`:''}</div><span class="task-cell task-project">${esc(t.project||'확인 필요')}</span><span class="task-cell task-owner">${esc(t.owner||'확인 필요')}</span><span class="task-cell task-due ${isOverdue(t)?'overdue':''}">${esc(fmtShort(taskDue(t)))}</span><span class="task-status"><select class="task-status-select" aria-label="${esc(t.title)} 상태" onchange="updateTaskStatus('${encodeURIComponent(taskId(t))}',this.value)">${statusOptions(clean(t.status)||'예정')}</select></span><button class="task-more" aria-label="업무 상세" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">•••</button></div>`).join('')}
   renderWork=function(){
-    const tasks=db.tasks||[],open=tasks.filter(t=>!isDone(t)),review=open.filter(needsReview),done=tasks.filter(isDone),late=open.filter(isOverdue);
-    q('#workSourceState').innerHTML=`${sourceState(connection.tasks,'업무 중앙 데이터')} <span class="tag green">메인: 2026년 팀그릿 업무진행</span> ${syncBadge()} <button class="btn" onclick="syncPrimaryWorkTasks()">업무 원본 다시 읽기</button>${window.primaryTaskSyncMeta?` <span class="muted">${esc(window.primaryTaskSyncMeta.week||'')} · 연결 Drive ${esc(window.primaryTaskSyncMeta.linkedSourceCount||0)}개</span>`:''}${window.primaryTaskSyncError?` <span class="tag amber">${esc(window.primaryTaskSyncError)}</span>`:''}`;
+    const tasks=visibleWorkTasks(),hiddenLegacy=(db.tasks||[]).length-tasks.length,open=tasks.filter(t=>!isDone(t)),review=open.filter(needsReview),done=tasks.filter(isDone),late=open.filter(isOverdue);
+    q('#workSourceState').innerHTML=`${sourceState(connection.tasks,'업무 중앙 데이터')} <span class="tag green">메인: 2026년 팀그릿 업무진행</span> ${syncBadge()} <button class="btn" onclick="syncPrimaryWorkTasks()">업무 원본 다시 읽기</button>${window.primaryTaskSyncMeta?` <span class="muted">${esc(window.primaryTaskSyncMeta.week||'')} · 연결 Drive ${esc(window.primaryTaskSyncMeta.linkedSourceCount||0)}개</span>`:''}${hiddenLegacy?` <span class="muted">기존 출처 불명 업무 ${hiddenLegacy}개는 처리 목록에서 제외</span>`:''}${window.primaryTaskSyncError?` <span class="tag amber">${esc(window.primaryTaskSyncError)}</span>`:''}`;
     q('#workMetrics').innerHTML=`<div class="metric priority"><b>${open.length}</b><span class="muted">처리할 업무</span></div><div class="metric review"><b>${review.length}</b><span class="muted">확인 필요</span></div><div class="metric ${late.length?'priority':'good'}"><b>${late.length}</b><span class="muted">기한 지남</span></div><div class="metric good"><b>${done.length}</b><span class="muted">완료</span></div>`;
     q('#openTaskCount').textContent=open.length;q('#reviewTaskCount').textContent=review.length;q('#doneTaskCount').textContent=done.length;
     qa('[data-work-tab]').forEach(b=>b.classList.toggle('active',b.dataset.workTab===ui.workTab));
