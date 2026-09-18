@@ -45,19 +45,28 @@
   }
   renderProjects=function(){
     projectFilters();
-    const all=db.projects||[],search=norm(ui.projectSearch),filtered=all.filter(p=>(ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${p.customer} ${p.category}`).includes(search)));
+    const all=db.projects||[],search=norm(ui.projectSearch);
+    const projectTasks=p=>visibleWorkTasks().filter(t=>norm(t.project)===norm(p.name));
+    const filtered=all.filter(p=>{
+      const pt=projectTasks(p),people=pt.map(t=>t.owner).join(' '),titles=pt.map(t=>t.title).join(' ');
+      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
+    });
     const active=all.filter(p=>!doneStates.includes(clean(p.status))).length,review=all.filter(p=>/검토|확인/.test(clean(p.status))||!clean(p.category)).length,connected=all.filter(p=>p.driveFolderId||p.driveUrl||p.connectionStatus==='연결됨').length;
     q('#projectMetrics').innerHTML=`<div class="metric"><b>${all.length}</b><span class="muted">전체 프로젝트</span></div><div class="metric priority"><b>${active}</b><span class="muted">진행 중</span></div><div class="metric review"><b>${review}</b><span class="muted">검토 필요</span></div><div class="metric good"><b>${connected}</b><span class="muted">Drive 연결</span></div>`;
     q('#projectSourceState').innerHTML=`${sourceState(connection.data,'운영 데이터')} ${syncBadge()}`;
     const cats=['전체',...unique(all.map(p=>p.category)).slice(0,5)];
     q('#catTabs').innerHTML=cats.map(c=>`<button data-cat="${esc(c)}" class="${c===ui.projectCategory?'active':''}">${esc(c==='전체'?'전체':c)}</button>`).join('');
     q('#projectResultCount').textContent=`${filtered.length}개 프로젝트`;
-    q('#projectList').innerHTML=connection.data?(filtered.length?`<div class="project-list">${filtered.map(p=>{const sources=(p.sources||[]).length,taskCount=db.tasks.filter(t=>norm(t.project)===norm(p.name)&&!isDone(t)).length;return `<div class="project-row" data-project="${esc(p.id)}"><div><div class="project-name">${esc(p.name)}</div><div class="project-sub">남은 업무 ${taskCount}개 · 원본 ${sources}개</div></div><span class="project-customer">${esc(p.customer||'-')}</span><span>${esc(p.category||'기타')}</span>${tag(p.status||'확인 필요')}<span class="tag ${sources?'green':'amber'}">${sources?'연결됨':'확인 필요'}</span><span class="chevron">›</span></div>`}).join('')}</div>`:empty('검색 조건에 맞는 프로젝트가 없습니다.')):empty('중앙 운영 데이터에 연결하면 프로젝트가 표시됩니다.');
+    q('#projectList').innerHTML=connection.data?(filtered.length?`<div class="project-bento-grid">${filtered.map((p,i)=>{
+      const pt=projectTasks(p),open=pt.filter(t=>!isDone(t)),owners=[...new Set(pt.map(t=>clean(t.owner)).filter(Boolean))],sources=(p.sources||[]).length;
+      const sample=open.slice(0,3).map(t=>`<div class="project-card-task"><span>${esc(t.owner||'담당자 확인 필요')}</span><b>${esc(t.title||'')}</b></div>`).join('');
+      const sizeClass=(i%5===0||open.length>=5)?'project-card-wide':'';
+      return `<button class="project-bento-card ${sizeClass}" data-project="${esc(p.id)}"><div class="project-bento-top"><span class="tag ${sources?'green':'amber'}">${sources?'원본 '+sources+'개':'원본 확인 필요'}</span><span class="project-card-count">${open.length}개 업무</span></div><div class="project-bento-title">${esc(p.name)}</div><div class="project-bento-sub">${esc(p.customer||p.category||'프로젝트')} · 담당자 ${owners.length}명</div><div class="project-card-owners">${owners.slice(0,5).map(o=>`<span>${esc(o)}</span>`).join('')}${owners.length>5?`<span>+${owners.length-5}</span>`:''}</div><div class="project-card-tasks">${sample||'<span class="muted">연결된 업무 없음</span>'}</div><div class="project-bento-footer"><span>${esc(p.status||'확인 필요')}</span><b>프로젝트 열기 →</b></div></button>`
+    }).join('')}</div>`:empty('검색 조건에 맞는 프로젝트가 없습니다.')):empty('중앙 운영 데이터에 연결하면 프로젝트가 표시됩니다.');
     q('#sourceOverview').innerHTML=connection.data?sourceOverview():empty('원본 데이터가 연결되지 않았습니다.');
     qa('[data-cat]').forEach(b=>b.onclick=()=>{ui.projectCategory=b.dataset.cat;if(q('#projectCategoryFilter'))q('#projectCategoryFilter').value=ui.projectCategory;renderProjects()});
     bindProjectRows();
   };
-
   function taskMatchesTab(t){if(ui.workTab==='done')return isDone(t);if(ui.workTab==='review')return !isDone(t)&&needsReview(t);return !isDone(t)}
   function taskFilters(){
     fillSelect(q('#taskProjectFilter'),unique(visibleWorkTasks().map(t=>t.project)),'모든 프로젝트',ui.taskProject);
