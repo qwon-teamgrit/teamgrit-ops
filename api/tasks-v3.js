@@ -90,7 +90,11 @@ function recentMonthSection(text=''){
   for(let i=0;i<lines.length;i++){const d=dates(lines[i]);if(d)starts.push({i,header:clean(lines[i]),...d})}
   if(!starts.length)return {key:'최근 30일',text:s.slice(0,220000),from:cutoff.toISOString(),to:now.toISOString()};
   const chosen=starts.filter(x=>x.end>=cutoff).slice(0,6),sections=[];
-  for(const x of chosen){const pos=starts.findIndex(y=>y.i===x.i),b=pos+1<starts.length?starts[pos+1].i:lines.length;sections.push(lines.slice(x.i,b).join('\n'))}
+  for(const x of chosen){
+    const pos=starts.findIndex(y=>y.i===x.i),b=pos+1<starts.length?starts[pos+1].i:lines.length,weekLines=lines.slice(x.i,b);
+    const workStart=weekLines.findIndex(line=>clean(line).startsWith('주간 업무내용'));
+    if(workStart>=0)sections.push(weekLines.slice(workStart).join('\n'));
+  }
   const from=chosen.length?chosen[chosen.length-1].start:cutoff;
   return {key:`최근 30일 · ${from.toISOString().slice(0,10)}~${now.toISOString().slice(0,10)}`,text:sections.join('\n\n').slice(0,260000),from:from.toISOString(),to:now.toISOString()};
 }
