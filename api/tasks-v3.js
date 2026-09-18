@@ -79,10 +79,11 @@ async function analyze(req,res){const token=await access(req);if(!token)return j
 async function taskById(token,id){const rows=await sheetRows(token,'Tasks','A1:U5000');return rows.find(t=>clean(t.task_id)===clean(id))||null}
 
 function currentWeekSection(text=''){
-  const s=String(text||''),re=new RegExp('2026/\\\\d{1,2}/\\\\d{1,2}\\\\([^\\\\n]+?\\\\)\\\\s*-\\\\s*\\\\d{1,2}/\\\\d{1,2}\\\\([^\\\\n]+?\\\\)','g'),matches=[...s.matchAll(re)];
-  if(!matches.length)return {key:'',text:s.slice(0,60000)};
-  const sections=[];for(let i=0;i<Math.min(2,matches.length);i++){const a=matches[i].index,b=i+1<matches.length?matches[i+1].index:s.length;sections.push(s.slice(a,b))}
-  return {key:clean(matches[0][0]),text:sections.join('\\n\\n===== 이전 주차 미완료 업무 참고 =====\\n\\n').slice(0,180000)};
+  const s=String(text||''),lines=s.split(/\r?\n/),starts=[];
+  for(let i=0;i<lines.length;i++){const line=clean(lines[i]);if(line.startsWith('2026/')&&line.includes(' - '))starts.push(i)}
+  if(!starts.length)return {key:'',text:s.slice(0,60000)};
+  const sections=[];for(let n=0;n<Math.min(2,starts.length);n++){const a=starts[n],b=n+1<starts.length?starts[n+1]:lines.length;sections.push(lines.slice(a,b).join('\n'))}
+  return {key:clean(lines[starts[0]]),text:sections.join('\n\n===== 이전 주차 미완료 업무 참고 =====\n\n').slice(0,180000)};
 }
 function taskStableId(week,owner,project,title){return central.id('task',`${week}|${owner}|${project}|${norm(title)}`)}
 async function primaryLinkedContext(token,section){
@@ -122,7 +123,7 @@ function parsePrimaryTasksDeterministic(sectionText){
     if(hasChild){stack.push({indent:r.indent,text:r.text});continue}
     if(doneRe.test(r.text)&&mode==='진행사항')continue;
     const parent=stack.length?stack[stack.length-1].text:'';
-    const project=clean(parent.replace(/\s*\(.*?\)\s*/g,' '))||'확인 필요';
+    const project=clean((stack[0]?.text||parent).replace(/\s*\(.*?\)\s*/g,' '))||'확인 필요';
     const title=r.text;
     if(title.length<3)continue;
     tasks.push({title,project,owner,dueDate:'',status:mode==='계획사항'?'예정':'진행 중',evidence:`${owner} > ${mode}${parent?' > '+parent:''} > ${title}`,sourceIds:[]});
