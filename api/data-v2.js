@@ -69,7 +69,7 @@ async function generateMarketing(token){
   const pTokens=v=>norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','운영','관련'].includes(x));
   const projectForTask=t=>{
     const raw=norm(t.project),tt=pTokens(t.project);let best=null,score=0;
-    for(const p of recentProjects){const pn=norm(p.name),pt=pTokens(p.name);if(raw&&raw===pn)return p;let s=pt.filter(x=>tt.includes(x)).length*3;if(raw&&(raw.includes(pn)||pn.includes(raw)))s+=4;if(s>score){score=s;best=p}}
+    for(const p of projects){const pn=norm(p.name),pt=pTokens(p.name);if(raw&&raw===pn)return p;let s=pt.filter(x=>tt.includes(x)).length*3;if(raw&&(raw.includes(pn)||pn.includes(raw)))s+=4;if(s>score){score=s;best=p}}
     return score>=3?best:null;
   };
   const worklogProjects=promoTasks.map(projectForTask).filter(Boolean);
@@ -121,7 +121,7 @@ async function generateDrafts(token,b){
   const cutoff=Date.now()-30*24*60*60*1000,sourceModified=new Map(sources.map(s=>[clean(s.source_id),Date.parse(clean(s.modified_time))||0])),hasRecentSource=raw=>ids(raw).some(id=>(sourceModified.get(id)||0)>=cutoff);
   const fs=new Set(ids(c.source_fact_ids)),ps=new Set(ids(c.source_project_ids)),
     selectedFacts=facts.filter(f=>fs.has(clean(f.fact_id))&&clean(f.verification_status)==='승인됨'&&hasRecentSource(f.source_ids)),
-    selectedProjects=projects.filter(p=>ps.has(clean(p.project_id))&&hasRecentSource(p.source_ids));
+    selectedProjects=projects.filter(p=>ps.has(clean(p.project_id)));
   if(!selectedFacts.length&&!selectedProjects.length)throw new Error('selected_sources_are_older_than_30_days');
 
   const channels=arr(b.channels).length?arr(b.channels):[
