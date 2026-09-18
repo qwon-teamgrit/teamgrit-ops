@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/material3.css">
   <link rel="stylesheet" href="/sales.css">
   <link rel="stylesheet" href="/workspace-v2.css">
+  <link rel="stylesheet" href="/phase3-ui.css">
 </head>
 <!-- production-source: work-queue-v2 -->
 <body>
@@ -25,6 +26,7 @@
     <div class="nav-label nav-label-sub">참고 정보</div>
     <div class="nav">
       <button id="navSales"><span class="nav-icon">◇</span><span>영업</span></button>
+      <button id="navEvidence"><span class="nav-icon">◆</span><span>제품 근거 · 마케팅</span></button>
       <button id="navAutomation"><span class="nav-icon">↻</span><span>실행 이력</span></button>
     </div>
     <div class="side-footer"><span class="status-dot"></span><span>TeamGRIT Ops</span><b>운영 중</b></div>
@@ -100,6 +102,18 @@
       <div class="panel"><div class="ph"><b>Contact</b><span class="muted">기업별 담당자 정보</span></div><div class="pb" id="contactList"></div></div>
     </section>
 
+    <section id="evidenceMarketing" class="hidden">
+      <div class="head page-head">
+        <div><div class="eyebrow">PRODUCT EVIDENCE · MARKETING</div><h1>제품 근거 · 마케팅</h1><div class="muted">Drive 변경에서 제품 Fact 후보를 만들고, 승인된 사실만으로 주간 홍보 소재와 채널별 초안을 생성합니다.</div><div id="phase3State" class="inline-state"></div></div>
+        <div class="head-actions"><button class="btn" id="phase3Refresh">새로고침</button><button class="btn primary" id="phase3ScanFacts">Drive 변경 Fact 찾기</button></div>
+      </div>
+      <div class="metrics compact-metrics" id="phase3Metrics"></div>
+      <div class="panel"><div class="ph"><div><b>제품 근거 후보</b><span class="muted">시스템개발팀·Drive 근거와 개발 사이트를 비교합니다. 승인 전에는 공식 사실로 사용하지 않습니다.</span></div></div><div class="pb" id="phase3FactCandidates"></div></div>
+      <div class="panel"><div class="ph"><div><b>승인된 제품 근거</b><span class="muted">기능명·설명·적용 대상·개발 상태·근거·확인자·공개 상태</span></div></div><div class="pb" id="phase3ApprovedFacts"></div></div>
+      <div class="panel"><div class="ph"><div><b>주간 홍보 소재</b><span class="muted">승인된 제품 근거와 완료 프로젝트만 사용합니다.</span></div><button class="btn primary" id="phase3GenerateMarketing">이번 주 소재 생성</button></div><div class="pb" id="phase3Marketing"></div></div>
+      <div class="panel"><div class="ph"><div><b>채널별 초안</b><span class="muted">홈페이지 · SNS · 보도자료 초안과 필요한 사진·수치·확인 사항</span></div></div><div class="pb" id="phase3Drafts"></div></div>
+    </section>
+
     <section id="automation" class="hidden">
       <div class="head page-head"><div><div class="eyebrow">HISTORY</div><h1>실행 이력</h1><div class="muted">AI 모델, 실행 시각, 성공·실패와 오류를 확인합니다.</div><div id="automationSourceState" class="inline-state"></div></div><button class="btn" id="refreshHistory">새로고침</button></div>
       <div class="metrics compact-metrics" id="automationMetrics"></div>
@@ -140,5 +154,6 @@
 <script src="/phase1-entities.js"></script>
 <script src="/incremental-sync.js"></script>
 <script src="/workspace-v2.js"></script>
+<script src="/phase3-ui.js"></script>
 </body>
 </html>
