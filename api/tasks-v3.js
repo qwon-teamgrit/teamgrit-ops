@@ -1,7 +1,7 @@
 require('./_lib/gemini-model-compat')();
 const base=require('./tasks-v2');
 const central=require('./_lib/central-entities');
-const {gemini,clean,arr,readFile}=require('./_lib/source-corpus-all');
+const {gemini,clean,arr,readFile,WORK_DOC_ID}=require('./_lib/source-corpus-all');
 
 const OPS=process.env.OPS_DATA_SHEET_ID||'1Gfs2mC9_b7_u7sGIDC74WD-GUTLJy8JqBhSXwlzN_Uk';
 
@@ -78,6 +78,88 @@ async function analyze(req,res){const token=await access(req);if(!token)return j
 
 async function taskById(token,id){const rows=await sheetRows(token,'Tasks','A1:U5000');return rows.find(t=>clean(t.task_id)===clean(id))||null}
 
+function currentWeekSection(text=''){
+  const s=String(text||''),start=s.search(/2026\\/\\d{1,2}\\/\\d{1,2}[^\\n]*/);
+  if(start<0)return {key:'',text:s.slice(0,60000)};
+  const rest=s.slice(start),line=(rest.match(/^([^\\n]+)/)||[])[1]||'',next=rest.search(/\\n_{6,}\\s*\\n2026\\/\\d{1,2}\\/\\d{1,2}/);
+  return {key:clean(line),text:(next>0?rest.slice(0,next):rest).slice(0,120000)};
+}
+function taskStableId(week,owner,project,title){return central.id('task',`${week}|${owner}|${project}|${norm(title)}`)}
+async function primaryLinkedContext(token,section){
+  const rows=await sheetRows(token,'Sources','A1:O5000'),mainRows=rows.filter(s=>clean(s.root_source)==='2026년 팀그릿 업무진행'&&clean(s.file_id)!==WORK_DOC_ID);
+  const ranked=rank(section,mainRows,s=>[s.title,s.read_detail,s.url].map(clean).join(' '),18,.005);
+  const chunks=[],used=[];
+  for(const x of ranked){
+    const s=x.item,fileId=clean(s.file_id),mimeType=clean(s.mime_type);
+    if(!fileId||!mimeType||mimeType==='application/vnd.google-apps.folder')continue;
+    try{
+      const r=await readFile(token,{id:fileId,mimeType,name:sourceTitle(s)}),body=clean(r?.text).slice(0,18000);
+      if(!body)continue;
+      used.push({id:sourceId(s),title:sourceTitle(s),url:clean(s.url),fileId});
+      chunks.push(`[LINKED_DRIVE id="${sourceId(s)}" title="${sourceTitle(s)}"]\\n${body}\\n[/LINKED_DRIVE]`);
+      if(chunks.join('\\n').length>120000)break;
+    }catch{}
+  }
+  return {text:chunks.join('\\n').slice(0,120000),sources:used};
+}
+function dedupePrimaryTasks(tasks){
+  const out=[];
+  for(const t of tasks){
+    if(!clean(t.title)||!clean(t.owner))continue;
+    let dup=false;
+    for(const e of out){
+      const sameOwner=norm(e.owner)===norm(t.owner),sameProject=!clean(e.project)||!clean(t.project)||norm(e.project)===norm(t.project);
+      if(sameOwner&&sameProject&&taskSimilarity(e.title,t.title)>=.72){dup=true;break}
+    }
+    if(!dup)out.push(t);
+  }
+  return out;
+}
+async function syncPrimaryTasks(req,res){
+  const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});
+  const main=await readFile(token,{id:WORK_DOC_ID,mimeType:'application/vnd.google-apps.document',name:'2026년 팀그릿 업무진행'});
+  const week=currentWeekSection(main.text||'');
+  if(!clean(week.text))return json(res,500,{error:'primary_work_section_not_found'});
+  const linked=await primaryLinkedContext(token,week.text);
+  const sources=await sheetRows(token,'Sources','A1:O5000'),mainSource=sources.find(s=>clean(s.file_id)===WORK_DOC_ID)||{},validIds=new Set(sources.map(sourceId).filter(Boolean));
+  const prompt=`너는 TeamGRIT의 현재 주간 업무를 중앙 Tasks로 동기화하는 에이전트다.
+가장 중요한 원칙:
+1. 1차 사실 원본은 반드시 "2026년 팀그릿 업무진행"의 최신 주차다.
+2. 담당자는 업무를 추측해서 배정하지 말고, 주간 업무내용 계층에서 해당 업무를 작성한 가장 가까운 사람 이름을 정확히 사용한다. 예: 김규원 아래 CoBiz 업무면 owner는 김규원이다.
+3. 연결 Drive 본문은 업무의 세부 내용/프로젝트/근거를 보강하는 용도다. Drive 내용만으로 새로운 담당자를 만들지 않는다.
+4. "진행사항" 중 이미 끝났다고 명시된 항목은 새 처리 업무로 만들지 않는다. 아직 진행 중, 추가 확인, 반영, 테스트, 작성, 전달, 검토 등이 남은 경우만 포함한다.
+5. "계획사항"은 실행 가능한 단위로 포함한다.
+6. 회의/출장 일정은 그 자체를 업무로 만들지 말고, 명시된 준비·확인·후속 조치가 있을 때만 업무로 만든다.
+7. 같은 사람이 같은 프로젝트에서 사실상 같은 작업을 반복해서 쓰면 하나로 합친다.
+8. 프로젝트는 문서의 가까운 프로젝트 소제목(CoBiz, 서울로봇쇼, 당진낙농축협 등)을 우선 사용한다.
+9. 기한은 원문에 명시된 경우만 넣고, 없으면 빈 문자열.
+10. sourceIds는 제공된 MAIN_SOURCE 또는 LINKED_DRIVE id만 사용한다.
+JSON만 반환: {"tasks":[{"title":string,"project":string,"owner":string,"dueDate":string,"status":"예정"|"진행 중"|"검토 필요"|"승인 대기"|"보류","evidence":string,"sourceIds":[string]}]}.
+
+[CURRENT_WEEK]
+${week.text}
+
+[MAIN_SOURCE]
+id=${sourceId(mainSource)||'main_work_doc'}
+title=2026년 팀그릿 업무진행
+url=https://docs.google.com/document/d/${WORK_DOC_ID}/edit
+
+[LINKED_DRIVE_CONTEXT]
+${linked.text||'연결 Drive 본문 없음'}`;
+  const ai=await gemini(prompt);
+  let extracted=arr(ai.data?.tasks).map(t=>({title:clean(t.title),project:clean(t.project),owner:clean(t.owner),dueDate:clean(t.dueDate),status:clean(t.status)||'예정',evidence:clean(t.evidence),sourceIds:arr(t.sourceIds).map(clean).filter(x=>x==='main_work_doc'||validIds.has(x))})).filter(t=>t.title&&t.owner);
+  extracted=dedupePrimaryTasks(extracted);
+  const raw=await sheetRows(token,'Tasks','A1:U5000'),existingById=new Map(raw.map(t=>[clean(t.task_id),t])),preserved=raw.filter(t=>clean(t.origin_type)!=='2026년 팀그릿 업무진행'),now=new Date().toISOString(),mainId=sourceId(mainSource)||'main_work_doc';
+  const managed=extracted.map(t=>{
+    const taskId=taskStableId(week.key,t.owner,t.project,t.title),old=existingById.get(taskId)||{},srcIds=[...new Set([mainId,...t.sourceIds].filter(Boolean))];
+    return {task_id:taskId,title:t.title,project:t.project||'확인 필요',owner:t.owner,due_date:t.dueDate||'확인 필요',status:old.status?old.status:phase2.normalizeStatus(t.status),source:'2026년 팀그릿 업무진행 + 연결 Drive',source_url:`https://docs.google.com/document/d/${WORK_DOC_ID}/edit`,source_ids:srcIds.join(','),created_at:old.created_at||now,approved_at:old.approved_at||now,updated_at:now,predecessor_task_ids:old.predecessor_task_ids||'',result_url:old.result_url||'',result_title:old.result_title||'',followup_source_task_id:old.followup_source_task_id||'',followup_generated_statuses:old.followup_generated_statuses||'',review_notification_at:old.review_notification_at||'',origin_type:'2026년 팀그릿 업무진행',origin_detail:`${week.key} · ${t.evidence||'주간 업무내용'}`,origin_id:week.key};
+  });
+  const all=[...managed,...preserved],headers=phase2.TASK_HEADERS,last=phase2.TASK_LAST_COL;
+  await gf(token,`https://sheets.googleapis.com/v4/spreadsheets/${OPS}/values/${encodeURIComponent(`Tasks!A2:${last}5000`)}:clear`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  if(all.length)await gf(token,`https://sheets.googleapis.com/v4/spreadsheets/${OPS}/values/${encodeURIComponent(`Tasks!A2:${last}${all.length+1}`)}?valueInputOption=RAW`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:all.map(t=>headers.map(h=>t[h]??''))})});
+  return json(res,200,{ok:true,week:week.key,count:managed.length,linkedSourceCount:linked.sources.length,modelUsed:ai.modelUsed,tasks:managed});
+}
+
 const RESULT_KINDS=new Set(['auto','email','message','document','spreadsheet','presentation','pdf','research','code','image','design','execution']);
 function normalizeResultKind(v){const k=clean(v).toLowerCase();return RESULT_KINDS.has(k)?k:'auto'}
 function artifactData(v){try{return typeof v==='string'?JSON.parse(v||'{}'):(v||{})}catch{return {}}}
@@ -129,4 +211,4 @@ async function generateResult(req,res){const token=await access(req);if(!token)r
 async function listReviews(req,res){const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const [results,reviews]=await Promise.all([central.list(token,'Results'),central.list(token,'ReviewRequests')]);const visible=results.filter(r=>['검토 대기','수정 필요'].includes(clean(r.review_status))||((clean(r.artifact_kind)==='image'||clean(r.artifact_kind)==='design')&&clean(r.review_status)==='승인됨')).sort((a,b)=>String(b.updated_at||b.created_at).localeCompare(String(a.updated_at||a.created_at)));return json(res,200,{results:visible,reviews,allResults:results});}
 async function reviewResult(req,res){const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const b=await readBody(req),resultId=clean(b.result_id||b.id),action=clean(b.action);if(!resultId)return json(res,400,{error:'result_id_required'});const results=await central.list(token,'Results'),idx=results.findIndex(r=>clean(r.result_id)===resultId);if(idx<0)return json(res,404,{error:'result_not_found'});const now=new Date().toISOString(),reviewer=await central.userEmail(token),r={...results[idx]};if(b.content!==undefined)r.content=String(b.content);if(b.title!==undefined)r.title=clean(b.title);if(b.artifactData!==undefined)r.artifact_data=typeof b.artifactData==='string'?b.artifactData:JSON.stringify(b.artifactData||{});r.updated_at=now;let materialized=null;if(action==='approve'){materialized=clean(r.file_url)?{kind:clean(r.artifact_kind),url:clean(r.file_url),status:'초안 파일 승인·확정'}:await materializeResult(token,r);r.review_status='승인됨';r.status='완료';r.approved_by=reviewer;r.approved_at=now;r.executor_status=materialized.status||'확정';if(materialized.url)r.file_url=materialized.url}else if(action==='request_changes'){r.review_status='수정 필요';r.status='초안';r.executor_status='수정 대기'}else return json(res,400,{error:'invalid_review_action'});results[idx]=r;await central.replace(token,'Results',results);const reviews=await central.list(token,'ReviewRequests'),ri=reviews.findIndex(x=>clean(x.target_id)===resultId&&['검토 대기','수정 필요'].includes(clean(x.status)));if(ri>=0){reviews[ri]={...reviews[ri],status:action==='approve'?'승인됨':'수정 필요',reviewed_by:reviewer,reviewed_at:now,note:clean(b.note)||reviews[ri].note};await central.replace(token,'ReviewRequests',reviews)}if(action==='approve'){const approval=central.approval({targetType:'Result',targetId:resultId,action:'결과물 승인·확정',approvedBy:reviewer,source:'앱 내부 검토함',note:`${clean(r.title)} · ${clean(r.artifact_kind)}`});await central.append(token,'Approvals',[approval])}return json(res,200,{ok:true,result:r,materialized});}
 
-module.exports=async(req,res)=>{try{const u=new URL(req.url,`https://${req.headers.host}`),action=u.searchParams.get('action');if(req.method==='POST'&&action==='analyze')return await analyze(req,res);if(req.method==='POST'&&action==='generate-result')return await generateResult(req,res);if(req.method==='GET'&&action==='reviews')return await listReviews(req,res);if(req.method==='POST'&&action==='review-result')return await reviewResult(req,res);return base(req,res)}catch(e){return json(res,500,{error:e.message,connection:'연결 안 됨'})}};
+module.exports=async(req,res)=>{try{const u=new URL(req.url,`https://${req.headers.host}`),action=u.searchParams.get('action');if(req.method==='POST'&&action==='analyze')return await analyze(req,res);if(req.method==='POST'&&action==='sync-primary')return await syncPrimaryTasks(req,res);if(req.method==='POST'&&action==='generate-result')return await generateResult(req,res);if(req.method==='GET'&&action==='reviews')return await listReviews(req,res);if(req.method==='POST'&&action==='review-result')return await reviewResult(req,res);return base(req,res)}catch(e){return json(res,500,{error:e.message,connection:'연결 안 됨'})}};
