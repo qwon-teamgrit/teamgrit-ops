@@ -42,27 +42,117 @@ async function approveFact(token,b){
 }
 function weekKey(){const d=new Date(),a=new Date(d.getFullYear(),0,1),w=Math.ceil((((d-a)/86400000)+a.getDay()+1)/7);return d.getFullYear()+'-W'+String(w).padStart(2,'0')}
 async function generateMarketing(token){
-  const [facts,projects,existing]=await Promise.all([central.list(token,'ProductFacts'),sheetRows(token,'Projects'),central.list(token,'MarketingCandidates')]),
-    approved=facts.filter(f=>clean(f.verification_status)==='승인됨'&&clean(f.public_status)!=='비공개'),
-    completed=projects.filter(p=>/완료|납품|검수 완료|종료/i.test(clean(p.manual_status||p.source_status))),
-    eventProjects=projects.filter(p=>{
-      const category=clean(p.manual_category||p.source_category),name=clean(p.name),status=clean(p.manual_status||p.source_status);
-      return /행사|마케팅|전시|워크숍|세미나|챌린지|로봇쇼|컨퍼런스|박람회/i.test(category+' '+name)
-        && !/취소|폐기|중단/i.test(status)
-        && clean(p.source_ids||p.source_evidence);
-    }),
-    eligibleProjects=[...new Map([...completed,...eventProjects].map(p=>[clean(p.project_id),p])).values()];
-  if(!approved.length&&!eligibleProjects.length)throw new Error('approved_public_facts_or_marketing_projects_required');
-  const prompt=['너는 TeamGRIT B2B 로봇/AI 마케팅 기획자다. 이번 주 홍보 소재는 기술/제품 이야기뿐 아니라 행사·전시·워크숍·시연·고객 방문·PoC 진행·프로젝트 완료 같은 이벤트성 소식도 포함할 수 있다. 단, 아래에 제공된 승인 제품 사실과 근거가 있는 프로젝트/이벤트만 사용한다. 행사/프로젝트가 예정 또는 진행 중이면 완료 성과처럼 표현하지 말고 현재 상태를 그대로 쓴다. 제공되지 않은 성능 수치, 고객 성과, 일정, 참가 확정, 인용문은 만들지 않는다. 사진, 행사 일정 최종 확인, 고객명 공개 동의, 수치 등이 필요하면 requiredAssets 또는 missingChecks에 명시한다. 기술 소재와 이벤트 소재를 균형 있게 최대 8개 제안한다. factIds/projectIds에는 제공된 ID만 사용한다. JSON만 반환: {"candidates":[{"title":string,"angle":string,"factIds":[string],"projectIds":[string],"rationale":string,"requiredAssets":[string],"missingChecks":[string]}]}.','','[승인된 제품 사실]',...approved.slice(0,80).map(f=>'[FACT '+f.fact_id+'] '+(f.feature_name||f.subject)+' | '+(f.description||f.fact)+' | 적용:'+f.applied_entities+' | 개발:'+f.development_status+' | 공개:'+f.public_status),'','[홍보 가능한 프로젝트·이벤트]',...eligibleProjects.slice(0,80).map(p=>'[PROJECT '+p.project_id+'] '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | '+p.summary+' | 상태:'+(p.manual_status||p.source_status)+' | 근거:'+p.source_evidence)].join('\n');
-  const ai=await gemini(prompt),vf=new Set(approved.map(f=>clean(f.fact_id))),vp=new Set(eligibleProjects.map(p=>clean(p.project_id))),now=new Date().toISOString(),wk=weekKey(),rows=arr(ai.data?.candidates).map(x=>{const fs=arr(x.factIds).map(clean).filter(id=>vf.has(id)),ps=arr(x.projectIds).map(clean).filter(id=>vp.has(id));return {content_id:central.id('content',wk+'|'+clean(x.title)+'|'+fs.join(',')+'|'+ps.join(',')),week_key:wk,title:clean(x.title),angle:clean(x.angle),source_fact_ids:fs.join(','),source_project_ids:ps.join(','),rationale:clean(x.rationale),required_assets:arr(x.requiredAssets).map(clean).filter(Boolean).join(' | '),missing_checks:arr(x.missingChecks).map(clean).filter(Boolean).join(' | '),status:'후보',created_at:now,approved_by:'',approved_at:''}}).filter(x=>x.title&&(x.source_fact_ids||x.source_project_ids));
-  await central.replace(token,'MarketingCandidates',[...existing.filter(e=>clean(e.week_key)!==wk||clean(e.status)==='승인됨'),...rows]);return {week:wk,candidates:rows,modelUsed:ai.modelUsed,approvedFacts:approved.length,completedProjects:completed.length,eventProjects:eventProjects.length}
+  const [facts,projects,sources,existing]=await Promise.all([
+    central.list(token,'ProductFacts'),
+    sheetRows(token,'Projects'),
+    sheetRows(token,'Sources'),
+    central.list(token,'MarketingCandidates')
+  ]);
+  const cutoff=Date.now()-30*24*60*60*1000;
+  const sourceModified=new Map(sources.map(s=>[clean(s.source_id),Date.parse(clean(s.modified_time))||0]));
+  const recentSourceIds=raw=>ids(raw).filter(id=>(sourceModified.get(id)||0)>=cutoff);
+  const hasRecentSource=raw=>recentSourceIds(raw).length>0;
+
+  const approved=facts.filter(f=>clean(f.verification_status)==='승인됨'&&clean(f.public_status)!=='비공개'&&hasRecentSource(f.source_ids));
+  const recentProjects=projects.filter(p=>hasRecentSource(p.source_ids));
+  const completed=recentProjects.filter(p=>/완료|납품|검수 완료|종료/i.test(clean(p.manual_status||p.source_status)));
+  const eventProjects=recentProjects.filter(p=>{
+    const category=clean(p.manual_category||p.source_category),name=clean(p.name),status=clean(p.manual_status||p.source_status);
+    return /행사|마케팅|전시|워크숍|세미나|챌린지|로봇쇼|컨퍼런스|박람회|시연|방문|poc/i.test(category+' '+name)
+      && !/취소|폐기|중단/i.test(status)
+      && clean(p.source_ids||p.source_evidence);
+  });
+  const eligibleProjects=[...new Map([...completed,...eventProjects].map(p=>[clean(p.project_id),p])).values()];
+  if(!approved.length&&!eligibleProjects.length)throw new Error('recent_30d_approved_facts_or_marketing_projects_required');
+
+  const prompt=[
+    '너는 TeamGRIT B2B 로봇/AI 마케팅 기획자다.',
+    '검토 범위는 최근 30일 이내에 실제로 수정된 원본 자료로 제한한다. 아래 목록은 이미 최근 30일 필터를 통과한 자료만 제공된다.',
+    '이번 주 홍보 소재는 기술/제품 업데이트뿐 아니라 행사·전시·워크숍·시연·고객 방문·PoC 진행·프로젝트 완료 같은 이벤트성 소식도 포함할 수 있다.',
+    '행사/프로젝트가 예정 또는 진행 중이면 완료 성과처럼 표현하지 말고 현재 상태를 그대로 쓴다.',
+    '제공되지 않은 성능 수치, 고객 성과, 일정, 참가 확정, 인용문은 만들지 않는다.',
+    '사진, 행사 일정 최종 확인, 고객명 공개 동의, 수치 등이 필요하면 requiredAssets 또는 missingChecks에 명시한다.',
+    '기술 소재와 이벤트 소재가 한쪽으로 치우치지 않도록 최대 8개 제안한다.',
+    'factIds/projectIds에는 제공된 ID만 사용한다.',
+    'JSON만 반환: {"candidates":[{"title":string,"angle":string,"factIds":[string],"projectIds":[string],"rationale":string,"requiredAssets":[string],"missingChecks":[string]}]}.',
+    '',
+    '[최근 30일 내 승인된 제품 사실]',
+    ...approved.slice(0,80).map(f=>'[FACT '+f.fact_id+'] '+(f.feature_name||f.subject)+' | '+(f.description||f.fact)+' | 적용:'+f.applied_entities+' | 개발:'+f.development_status+' | 공개:'+f.public_status),
+    '',
+    '[최근 30일 내 홍보 가능한 프로젝트·이벤트]',
+    ...eligibleProjects.slice(0,80).map(p=>'[PROJECT '+p.project_id+'] '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | '+p.summary+' | 상태:'+(p.manual_status||p.source_status)+' | 근거:'+p.source_evidence)
+  ].join('\n');
+
+  const ai=await gemini(prompt),vf=new Set(approved.map(f=>clean(f.fact_id))),vp=new Set(eligibleProjects.map(p=>clean(p.project_id))),now=new Date().toISOString(),wk=weekKey(),
+    rows=arr(ai.data?.candidates).map(x=>{const fs=arr(x.factIds).map(clean).filter(id=>vf.has(id)),ps=arr(x.projectIds).map(clean).filter(id=>vp.has(id));return {content_id:central.id('content',wk+'|'+clean(x.title)+'|'+fs.join(',')+'|'+ps.join(',')),week_key:wk,title:clean(x.title),angle:clean(x.angle),source_fact_ids:fs.join(','),source_project_ids:ps.join(','),rationale:clean(x.rationale),required_assets:arr(x.requiredAssets).map(clean).filter(Boolean).join(' | '),missing_checks:arr(x.missingChecks).map(clean).filter(Boolean).join(' | '),status:'후보',created_at:now,approved_by:'',approved_at:''}}).filter(x=>x.title&&(x.source_fact_ids||x.source_project_ids));
+  await central.replace(token,'MarketingCandidates',[...existing.filter(e=>clean(e.week_key)!==wk||clean(e.status)==='승인됨'),...rows]);
+  return {week:wk,candidates:rows,modelUsed:ai.modelUsed,approvedFacts:approved.length,completedProjects:completed.length,eventProjects:eventProjects.length,windowDays:30}
 }
 async function approveMarketing(token,b){const rows=await central.list(token,'MarketingCandidates'),i=rows.findIndex(x=>clean(x.content_id)===clean(b.content_id));if(i<0)throw new Error('marketing_candidate_not_found');const reviewer=await central.userEmail(token),now=new Date().toISOString();rows[i]={...rows[i],status:'승인됨',approved_by:reviewer,approved_at:now};await central.replace(token,'MarketingCandidates',rows);await central.append(token,'Approvals',[central.approval({targetType:'MarketingCandidate',targetId:rows[i].content_id,action:'홍보 소재 승인',approvedBy:reviewer,source:'3차 마케팅 검토',note:rows[i].title})]);return rows[i]}
 async function generateDrafts(token,b){
-  const [candidates,facts,projects,existing]=await Promise.all([central.list(token,'MarketingCandidates'),central.list(token,'ProductFacts'),sheetRows(token,'Projects'),central.list(token,'MarketingDrafts')]),c=candidates.find(x=>clean(x.content_id)===clean(b.content_id));if(!c||clean(c.status)!=='승인됨')throw new Error('approved_marketing_candidate_required');
-  const fs=new Set(ids(c.source_fact_ids)),ps=new Set(ids(c.source_project_ids)),selectedFacts=facts.filter(f=>fs.has(clean(f.fact_id))&&clean(f.verification_status)==='승인됨'),selectedProjects=projects.filter(p=>ps.has(clean(p.project_id))),channels=arr(b.channels).length?arr(b.channels):['홈페이지','SNS','보도자료'];
-  const prompt=['너는 TeamGRIT 공식 콘텐츠 작성자다. 아래 승인 소재와 승인된 사실/근거가 있는 프로젝트·이벤트만 사용한다. 예정/진행 중 이벤트를 완료된 성과처럼 표현하지 않는다. 없는 숫자, 고객 코멘트, 성능, 일정은 절대 만들지 않는다. 채널별로 바로 검토 가능한 초안을 작성하되 사진·수치·고객명 공개 승인 등 부족한 것은 missingChecks와 requiredAssets에 명확히 표시한다. JSON만 반환: {"drafts":[{"channel":string,"title":string,"body":string,"requiredAssets":[string],"missingChecks":[string]}]}.','[채널] '+channels.join(', '),'[소재] '+c.title+' | '+c.angle+' | '+c.rationale,'[승인 사실]',...selectedFacts.map(f=>'- '+(f.feature_name||f.subject)+': '+(f.description||f.fact)+' | 적용:'+f.applied_entities+' | 근거:'+f.evidence_docs),'[연결 프로젝트·이벤트]',...selectedProjects.map(p=>'- '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | 상태:'+(p.manual_status||p.source_status)+' | '+p.summary),'[기존 확인 필요] '+(c.missing_checks||'없음'),'[필요 소재] '+(c.required_assets||'없음')].join('\n');
-  const ai=await gemini(prompt),now=new Date().toISOString(),rows=arr(ai.data?.drafts).filter(x=>channels.includes(clean(x.channel))).map(x=>({draft_id:central.id('draft',clean(c.content_id)+'|'+clean(x.channel)+'|'+now),content_id:clean(c.content_id),channel:clean(x.channel),title:clean(x.title),body:clean(x.body),required_assets:arr(x.requiredAssets).map(clean).filter(Boolean).join(' | '),missing_checks:arr(x.missingChecks).map(clean).filter(Boolean).join(' | '),status:'초안',created_at:now,approved_by:'',approved_at:''}));await central.replace(token,'MarketingDrafts',[...existing.filter(d=>clean(d.content_id)!==clean(c.content_id)),...rows]);return {drafts:rows,modelUsed:ai.modelUsed}
+  const [candidates,facts,projects,sources,existing]=await Promise.all([
+    central.list(token,'MarketingCandidates'),
+    central.list(token,'ProductFacts'),
+    sheetRows(token,'Projects'),
+    sheetRows(token,'Sources'),
+    central.list(token,'MarketingDrafts')
+  ]);
+  const c=candidates.find(x=>clean(x.content_id)===clean(b.content_id));if(!c||clean(c.status)!=='승인됨')throw new Error('approved_marketing_candidate_required');
+  const cutoff=Date.now()-30*24*60*60*1000,sourceModified=new Map(sources.map(s=>[clean(s.source_id),Date.parse(clean(s.modified_time))||0])),hasRecentSource=raw=>ids(raw).some(id=>(sourceModified.get(id)||0)>=cutoff);
+  const fs=new Set(ids(c.source_fact_ids)),ps=new Set(ids(c.source_project_ids)),
+    selectedFacts=facts.filter(f=>fs.has(clean(f.fact_id))&&clean(f.verification_status)==='승인됨'&&hasRecentSource(f.source_ids)),
+    selectedProjects=projects.filter(p=>ps.has(clean(p.project_id))&&hasRecentSource(p.source_ids));
+  if(!selectedFacts.length&&!selectedProjects.length)throw new Error('selected_sources_are_older_than_30_days');
+
+  const channels=arr(b.channels).length?arr(b.channels):[
+    '홈페이지',
+    'SNS 짧은글 KR',
+    'SNS 짧은글 EN',
+    '블로그/Medium KR',
+    '블로그/Medium EN',
+    '보도자료'
+  ];
+
+  const prompt=[
+    '너는 TeamGRIT의 시니어 B2B 테크 마케터이자 편집자다.',
+    '목표는 초안 수준이 아니라, 사실 확인 항목만 채우면 바로 게시 가능한 완성도 높은 원고를 만드는 것이다.',
+    '아래 소재와 최근 30일 내 승인된 사실/프로젝트·이벤트만 사용한다. 예정/진행 중 이벤트를 완료된 성과처럼 표현하지 않는다.',
+    '없는 숫자, 고객 코멘트, 성능, 일정, 파트너 발언, 계약/수주 사실을 절대 만들지 않는다.',
+    '문장은 자연스럽고 전문적이어야 하며, 반복적인 AI 문구와 과장 표현을 피한다. TeamGRIT의 제품/프로젝트 맥락이 독자가 이해할 수 있도록 배경-핵심 내용-의미-다음 단계가 연결되게 작성한다.',
+    '',
+    '[채널별 작성 기준]',
+    '- 홈페이지: 한국어 1,200~1,800자. 제목 + 2~4문장 리드 + 본문 3~5개 단락 + 핵심 포인트 3개 + CTA 1개. 기업 홈페이지 뉴스/인사이트에 바로 게시 가능한 톤.',
+    '- SNS 짧은글 KR: 한국어 500~900자. Instagram/Facebook/LinkedIn 공용. 첫 2문장에 훅, 본문 3~5개 짧은 단락, 마지막 CTA, 해시태그 5~8개 포함.',
+    '- SNS 짧은글 EN: 영어 180~300 words. Instagram/Facebook/LinkedIn 공용. 자연스러운 B2B English, hook + concise body + CTA + 5~8 hashtags.',
+    '- 블로그/Medium KR: 한국어 1,800~3,000자. 제목, 리드, 소제목 3~5개, 맥락/기술 또는 현장 의미/적용 사례/다음 단계까지 포함. 단순 보도문이 아니라 읽을 가치가 있는 장문 아티클.',
+    '- 블로그/Medium EN: 영어 900~1,400 words. Native-level B2B technology article. Title, dek, 4~6 section headings, context, technical or operational meaning, application, next steps, closing CTA.',
+    '- 보도자료: 한국어 2,200~3,500자. 제목, 부제, 리드문, 본문, 회사 소개/배경, 향후 계획 순서. 날짜/장소/인용문이 자료에 없으면 만들지 말고 missingChecks로 남긴다.',
+    '',
+    '각 결과물은 해당 채널의 권장 길이를 실제로 채운다. 지나치게 짧은 요약문을 반환하지 않는다.',
+    '필요한 사진, 캡처, 현장 이미지, 로고, 도표는 requiredAssets에 구체적으로 적는다.',
+    '게시 전 확인해야 할 고객명 공개, 정확한 일정, 수치, 파트너 표기, 행사명 등은 missingChecks에 적는다.',
+    '본문 안에는 [확인 필요] 같은 메모를 삽입하지 말고, 본문은 읽을 수 있는 완성본으로 작성하며 불확실한 사실 자체를 제외한다.',
+    'JSON만 반환: {"drafts":[{"channel":string,"title":string,"body":string,"requiredAssets":[string],"missingChecks":[string]}]}.',
+    '',
+    '[생성 채널] '+channels.join(', '),
+    '[승인 소재] '+c.title+' | '+c.angle+' | '+c.rationale,
+    '[최근 30일 내 승인 사실]',
+    ...selectedFacts.map(f=>'- '+(f.feature_name||f.subject)+': '+(f.description||f.fact)+' | 적용:'+f.applied_entities+' | 개발:'+f.development_status+' | 근거:'+f.evidence_docs),
+    '[최근 30일 내 연결 프로젝트·이벤트]',
+    ...selectedProjects.map(p=>'- '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | 상태:'+(p.manual_status||p.source_status)+' | '+p.summary+' | 근거:'+p.source_evidence),
+    '[기존 확인 필요] '+(c.missing_checks||'없음'),
+    '[필요 소재] '+(c.required_assets||'없음')
+  ].join('\n');
+
+  const ai=await gemini(prompt),now=new Date().toISOString(),rows=arr(ai.data?.drafts).filter(x=>channels.includes(clean(x.channel))).map(x=>({
+    draft_id:central.id('draft',clean(c.content_id)+'|'+clean(x.channel)+'|'+now),
+    content_id:clean(c.content_id),channel:clean(x.channel),title:clean(x.title),body:String(x.body||'').trim(),
+    required_assets:arr(x.requiredAssets).map(clean).filter(Boolean).join(' | '),
+    missing_checks:arr(x.missingChecks).map(clean).filter(Boolean).join(' | '),
+    status:'초안',created_at:now,approved_by:'',approved_at:''
+  }));
+  await central.replace(token,'MarketingDrafts',[...existing.filter(d=>clean(d.content_id)!==clean(c.content_id)),...rows]);
+  return {drafts:rows,modelUsed:ai.modelUsed,windowDays:30}
 }
 async function approveDraft(token,b){const rows=await central.list(token,'MarketingDrafts'),i=rows.findIndex(x=>clean(x.draft_id)===clean(b.draft_id));if(i<0)throw new Error('marketing_draft_not_found');const reviewer=await central.userEmail(token),now=new Date().toISOString();rows[i]={...rows[i],status:'승인됨',approved_by:reviewer,approved_at:now};await central.replace(token,'MarketingDrafts',rows);await central.append(token,'Approvals',[central.approval({targetType:'MarketingDraft',targetId:rows[i].draft_id,action:'채널 초안 승인',approvedBy:reviewer,source:'3차 마케팅 검토',note:rows[i].channel+' · '+rows[i].title})]);return rows[i]}
 async function attachEntities(token,payload){const x=await central.listMany(token,['Approvals','Customers','ProductFacts','Results','FactCandidates','MarketingCandidates','MarketingDrafts']);payload.entities={approvals:x.Approvals||[],customers:x.Customers||[],productFacts:x.ProductFacts||[],results:x.Results||[],factCandidates:x.FactCandidates||[],marketingCandidates:x.MarketingCandidates||[],marketingDrafts:x.MarketingDrafts||[]};if(payload.data)payload.data.entities=payload.entities;return payload}
