@@ -67,7 +67,7 @@
   function taskRows(tasks){return tasks.map(t=>`<div class="task-row" data-task-row="${esc(taskId(t))}"><div class="task-main"><button class="task-title-btn" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">${esc(t.title||'이름 없는 업무')}</button><span class="task-source">${esc(t.origin_type||t.source||'기존 중앙 업무')}</span>${t.duplicate_of?`<span class="tag amber">중복 의심</span>`:''}</div><span class="task-cell task-project">${esc(t.project||'확인 필요')}</span><span class="task-cell task-owner">${esc(t.owner||'확인 필요')}</span><span class="task-cell task-due ${isOverdue(t)?'overdue':''}">${esc(fmtShort(taskDue(t)))}</span><span class="task-status"><select class="task-status-select" aria-label="${esc(t.title)} 상태" onchange="updateTaskStatus('${encodeURIComponent(taskId(t))}',this.value)">${statusOptions(clean(t.status)||'예정')}</select></span><button class="task-more" aria-label="업무 상세" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">•••</button></div>`).join('')}
   renderWork=function(){
     const tasks=db.tasks||[],open=tasks.filter(t=>!isDone(t)),review=open.filter(needsReview),done=tasks.filter(isDone),late=open.filter(isOverdue);
-    q('#workSourceState').innerHTML=`${sourceState(connection.tasks,'업무 중앙 데이터')} ${syncBadge()}`;
+    q('#workSourceState').innerHTML=`${sourceState(connection.tasks,'업무 중앙 데이터')} <span class="tag green">메인: 2026년 팀그릿 업무진행</span> ${syncBadge()} <button class="btn" onclick="syncPrimaryWorkTasks()">업무 원본 다시 읽기</button>${window.primaryTaskSyncMeta?` <span class="muted">${esc(window.primaryTaskSyncMeta.week||'')} · 연결 Drive ${esc(window.primaryTaskSyncMeta.linkedSourceCount||0)}개</span>`:''}${window.primaryTaskSyncError?` <span class="tag amber">${esc(window.primaryTaskSyncError)}</span>`:''}`;
     q('#workMetrics').innerHTML=`<div class="metric priority"><b>${open.length}</b><span class="muted">처리할 업무</span></div><div class="metric review"><b>${review.length}</b><span class="muted">확인 필요</span></div><div class="metric ${late.length?'priority':'good'}"><b>${late.length}</b><span class="muted">기한 지남</span></div><div class="metric good"><b>${done.length}</b><span class="muted">완료</span></div>`;
     q('#openTaskCount').textContent=open.length;q('#reviewTaskCount').textContent=review.length;q('#doneTaskCount').textContent=done.length;
     qa('[data-work-tab]').forEach(b=>b.classList.toggle('active',b.dataset.workTab===ui.workTab));
@@ -77,7 +77,8 @@
     setNavCount();updateCandidateCount();
   };
 
-  window.updateTaskStatus=async(encodedId,status)=>{
+  window.syncPrimaryWorkTasks=async()=>{const state=q('#workSourceState');if(state)state.innerHTML='<span class="tag">2026년 팀그릿 업무진행 + 연결 Drive 다시 읽는 중...</span>';try{const s=await api('/api/work-tasks?action=sync-primary',{method:'POST',body:'{}'});window.primaryTaskSyncMeta=s;window.primaryTaskSyncError='';sessionStorage.setItem('teamgrit_primary_tasks_synced',String(Date.now()));const d=await api('/api/work-tasks?action=list');db.tasks=d.tasks||[];connection.tasks=true;renderWork();renderDash();toast(`원본 기준 업무 ${s.count||0}개로 다시 구성했습니다.`)}catch(e){window.primaryTaskSyncError=e.message;renderWork();toast('업무 원본 동기화 실패: '+e.message)}};
+window.updateTaskStatus=async(encodedId,status)=>{
     const id=decodeURIComponent(encodedId),task=db.tasks.find(t=>taskId(t)===id);if(!task)return;const previous=task.status;task.status=status;renderWork();
     try{await api('/api/work-tasks?action=update',{method:'POST',body:JSON.stringify({task_id:id,status})});toast(`업무 상태를 ‘${status}’로 변경했습니다.`);renderDash()}catch(e){task.status=previous;renderWork();alert('상태 변경 실패: '+e.message)}
   };
