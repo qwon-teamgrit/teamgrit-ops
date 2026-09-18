@@ -79,14 +79,22 @@ async function analyze(req,res){const token=await access(req);if(!token)return j
 
 async function taskById(token,id){const rows=await sheetRows(token,'Tasks','A1:U5000');return rows.find(t=>clean(t.task_id)===clean(id))||null}
 
-function currentWeekSection(text=''){
-  const s=String(text||''),lines=s.split(/\r?\n/),starts=[];
-  for(let i=0;i<lines.length;i++){const line=clean(lines[i]);if(line.startsWith('2026/')&&line.includes(' - '))starts.push(i)}
-  if(!starts.length)return {key:'',text:s.slice(0,60000)};
-  const sections=[];for(let n=0;n<Math.min(2,starts.length);n++){const a=starts[n],b=n+1<starts.length?starts[n+1]:lines.length;sections.push(lines.slice(a,b).join('\n'))}
-  return {key:clean(lines[starts[0]]),text:sections.join('\n\n===== 이전 주차 미완료 업무 참고 =====\n\n').slice(0,180000)};
+function recentMonthSection(text=''){
+  const s=String(text||''),lines=s.split(/\r?\n/),starts=[],now=new Date(),cutoff=new Date(now.getTime()-30*24*60*60*1000);
+  function dates(line){
+    const m=clean(line).match(/^(\d{4})\/(\d{1,2})\/(\d{1,2}).*?-\s*(\d{1,2})\/(\d{1,2})/);
+    if(!m)return null;
+    const y=Number(m[1]),sm=Number(m[2]),sd=Number(m[3]),em=Number(m[4]),ed=Number(m[5]);
+    return {start:new Date(y,sm-1,sd),end:new Date(y,em-1,ed)};
+  }
+  for(let i=0;i<lines.length;i++){const d=dates(lines[i]);if(d)starts.push({i,header:clean(lines[i]),...d})}
+  if(!starts.length)return {key:'최근 30일',text:s.slice(0,220000),from:cutoff.toISOString(),to:now.toISOString()};
+  const chosen=starts.filter(x=>x.end>=cutoff).slice(0,6),sections=[];
+  for(const x of chosen){const pos=starts.findIndex(y=>y.i===x.i),b=pos+1<starts.length?starts[pos+1].i:lines.length;sections.push(lines.slice(x.i,b).join('\n'))}
+  const from=chosen.length?chosen[chosen.length-1].start:cutoff;
+  return {key:`최근 30일 · ${from.toISOString().slice(0,10)}~${now.toISOString().slice(0,10)}`,text:sections.join('\n\n').slice(0,260000),from:from.toISOString(),to:now.toISOString()};
 }
-function taskStableId(week,owner,project,title){return central.id('task',`${week}|${owner}|${project}|${norm(title)}`)}
+function taskStableId(_windowKey,owner,project,title){return central.id('task',`${owner}|${project}|${norm(title)}`)}
 async function primaryLinkedContext(token,section){
   const rows=await sheetRows(token,'Sources','A1:O5000'),mainRows=rows.filter(s=>clean(s.root_source)==='2026년 팀그릿 업무진행'&&clean(s.file_id)!==WORK_DOC_ID);
   const ranked=rank(section,mainRows,s=>[s.title,s.read_detail,s.url].map(clean).join(' '),18,.005);
