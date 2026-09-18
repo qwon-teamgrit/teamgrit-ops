@@ -79,7 +79,7 @@ async function analyze(req,res){const token=await access(req);if(!token)return j
 async function taskById(token,id){const rows=await sheetRows(token,'Tasks','A1:U5000');return rows.find(t=>clean(t.task_id)===clean(id))||null}
 
 function currentWeekSection(text=''){
-  const s=String(text||''),re=/2026\\/\\d{1,2}\\/\\d{1,2}\\([^\\n]+?\\)\\s*-\\s*\\d{1,2}\\/\\d{1,2}\\([^\\n]+?\\)/g,matches=[...s.matchAll(re)];
+  const s=String(text||''),re=new RegExp('2026/\\\\d{1,2}/\\\\d{1,2}\\\\([^\\\\n]+?\\\\)\\\\s*-\\\\s*\\\\d{1,2}/\\\\d{1,2}\\\\([^\\\\n]+?\\\\)','g'),matches=[...s.matchAll(re)];
   if(!matches.length)return {key:'',text:s.slice(0,60000)};
   const sections=[];for(let i=0;i<Math.min(2,matches.length);i++){const a=matches[i].index,b=i+1<matches.length?matches[i+1].index:s.length;sections.push(s.slice(a,b))}
   return {key:clean(matches[0][0]),text:sections.join('\\n\\n===== 이전 주차 미완료 업무 참고 =====\\n\\n').slice(0,180000)};
