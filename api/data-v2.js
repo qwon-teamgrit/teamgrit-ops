@@ -155,6 +155,32 @@ async function generateDrafts(token,b){
   return {drafts:rows,modelUsed:ai.modelUsed,windowDays:30}
 }
 async function approveDraft(token,b){const rows=await central.list(token,'MarketingDrafts'),i=rows.findIndex(x=>clean(x.draft_id)===clean(b.draft_id));if(i<0)throw new Error('marketing_draft_not_found');const reviewer=await central.userEmail(token),now=new Date().toISOString();rows[i]={...rows[i],status:'승인됨',approved_by:reviewer,approved_at:now};await central.replace(token,'MarketingDrafts',rows);await central.append(token,'Approvals',[central.approval({targetType:'MarketingDraft',targetId:rows[i].draft_id,action:'채널 초안 승인',approvedBy:reviewer,source:'3차 마케팅 검토',note:rows[i].channel+' · '+rows[i].title})]);return rows[i]}
+async function deleteMarketingCandidate(token,b){
+  const id=clean(b.content_id);if(!id)throw new Error('content_id_required');
+  const [rows,drafts,approvals]=await Promise.all([central.list(token,'MarketingCandidates'),central.list(token,'MarketingDrafts'),central.list(token,'Approvals')]);
+  const found=rows.find(x=>clean(x.content_id)===id);if(!found)throw new Error('marketing_candidate_not_found');
+  await central.replace(token,'MarketingCandidates',rows.filter(x=>clean(x.content_id)!==id));
+  await central.replace(token,'MarketingDrafts',drafts.filter(x=>clean(x.content_id)!==id));
+  await central.replace(token,'Approvals',approvals.filter(x=>!(clean(x.target_type)==='MarketingCandidate'&&clean(x.target_id)===id)&&!(clean(x.target_type)==='MarketingDraft'&&drafts.some(d=>clean(d.content_id)===id&&clean(d.draft_id)===clean(x.target_id)))));
+  return {deleted:id,title:found.title}
+}
+async function deleteMarketingDraft(token,b){
+  const id=clean(b.draft_id);if(!id)throw new Error('draft_id_required');
+  const [rows,approvals]=await Promise.all([central.list(token,'MarketingDrafts'),central.list(token,'Approvals')]);
+  const found=rows.find(x=>clean(x.draft_id)===id);if(!found)throw new Error('marketing_draft_not_found');
+  await central.replace(token,'MarketingDrafts',rows.filter(x=>clean(x.draft_id)!==id));
+  await central.replace(token,'Approvals',approvals.filter(x=>!(clean(x.target_type)==='MarketingDraft'&&clean(x.target_id)===id)));
+  return {deleted:id,title:found.title}
+}
+async function deleteProductFact(token,b){
+  const id=clean(b.fact_id);if(!id)throw new Error('fact_id_required');
+  const [facts,approvals,candidates]=await Promise.all([central.list(token,'ProductFacts'),central.list(token,'Approvals'),central.list(token,'FactCandidates')]);
+  const found=facts.find(x=>clean(x.fact_id)===id);if(!found)throw new Error('product_fact_not_found');
+  await central.replace(token,'ProductFacts',facts.filter(x=>clean(x.fact_id)!==id));
+  await central.replace(token,'Approvals',approvals.filter(x=>!(clean(x.target_type)==='ProductFact'&&clean(x.target_id)===id)));
+  await central.replace(token,'FactCandidates',candidates.map(x=>clean(x.fact_id)===id?{...x,status:'검토 대기',reviewed_by:'',reviewed_at:''}:x));
+  return {deleted:id,title:found.feature_name||found.subject}
+}
 async function attachEntities(token,payload){const x=await central.listMany(token,['Approvals','Customers','ProductFacts','Results','FactCandidates','MarketingCandidates','MarketingDrafts']);payload.entities={approvals:x.Approvals||[],customers:x.Customers||[],productFacts:x.ProductFacts||[],results:x.Results||[],factCandidates:x.FactCandidates||[],marketingCandidates:x.MarketingCandidates||[],marketingDrafts:x.MarketingDrafts||[]};if(payload.data)payload.data.entities=payload.entities;return payload}
 
 module.exports=async(req,res)=>{try{
@@ -166,5 +192,8 @@ module.exports=async(req,res)=>{try{
   if(token&&req.method==='POST'&&action==='phase3-approve-marketing')return json(res,200,{ok:true,candidate:await approveMarketing(token,await body(req))});
   if(token&&req.method==='POST'&&action==='phase3-drafts')return json(res,200,{ok:true,...await generateDrafts(token,await body(req))});
   if(token&&req.method==='POST'&&action==='phase3-approve-draft')return json(res,200,{ok:true,draft:await approveDraft(token,await body(req))});
+  if(token&&req.method==='POST'&&action==='phase3-delete-marketing')return json(res,200,{ok:true,...await deleteMarketingCandidate(token,await body(req))});
+  if(token&&req.method==='POST'&&action==='phase3-delete-draft')return json(res,200,{ok:true,...await deleteMarketingDraft(token,await body(req))});
+  if(token&&req.method==='POST'&&action==='phase3-delete-fact')return json(res,200,{ok:true,...await deleteProductFact(token,await body(req))});
   const temp=fakeResponse();await original(req,temp);let payload={};try{payload=JSON.parse(temp.body||'{}')}catch{payload={raw:temp.body}}if(token&&temp.statusCode<400)await attachEntities(token,payload);res.statusCode=temp.statusCode;for(const [k,v] of Object.entries(temp.headers))res.setHeader(k,v);res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify(payload));
 }catch(e){return json(res,500,{error:e.message,connection:'연결 안 됨'})}};
