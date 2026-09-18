@@ -73,6 +73,7 @@ async function generateMarketing(token){
     '제공되지 않은 성능 수치, 고객 성과, 일정, 참가 확정, 인용문은 만들지 않는다.',
     '사진, 행사 일정 최종 확인, 고객명 공개 동의, 수치 등이 필요하면 requiredAssets 또는 missingChecks에 명시한다.',
     '기술 소재와 이벤트 소재가 한쪽으로 치우치지 않도록 최대 8개 제안한다.',
+    '아래 [최근 생성된 소재 제목]과 실질적으로 같은 소재나 같은 각도는 반복하지 않는다. 같은 근거를 쓰더라도 새로 추가된 최근 30일 근거가 있을 때만 다른 각도로 제안한다.',
     'factIds/projectIds에는 제공된 ID만 사용한다.',
     'JSON만 반환: {"candidates":[{"title":string,"angle":string,"factIds":[string],"projectIds":[string],"rationale":string,"requiredAssets":[string],"missingChecks":[string]}]}.',
     '',
@@ -80,7 +81,10 @@ async function generateMarketing(token){
     ...approved.slice(0,80).map(f=>'[FACT '+f.fact_id+'] '+(f.feature_name||f.subject)+' | '+(f.description||f.fact)+' | 적용:'+f.applied_entities+' | 개발:'+f.development_status+' | 공개:'+f.public_status),
     '',
     '[최근 30일 내 홍보 가능한 프로젝트·이벤트]',
-    ...eligibleProjects.slice(0,80).map(p=>'[PROJECT '+p.project_id+'] '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | '+p.summary+' | 상태:'+(p.manual_status||p.source_status)+' | 근거:'+p.source_evidence)
+    ...eligibleProjects.slice(0,80).map(p=>'[PROJECT '+p.project_id+'] '+p.name+' | 분류:'+(p.manual_category||p.source_category)+' | 대상:'+p.customer+' | '+p.summary+' | 상태:'+(p.manual_status||p.source_status)+' | 근거:'+p.source_evidence),
+    '',
+    '[최근 생성된 소재 제목 - 중복 방지]',
+    ...existing.filter(e=>(Date.parse(clean(e.created_at))||0)>=cutoff).slice(-40).map(e=>'- '+e.title+' | '+e.angle)
   ].join('\n');
 
   const ai=await gemini(prompt),vf=new Set(approved.map(f=>clean(f.fact_id))),vp=new Set(eligibleProjects.map(p=>clean(p.project_id))),now=new Date().toISOString(),wk=weekKey(),
