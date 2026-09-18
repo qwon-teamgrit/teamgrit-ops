@@ -204,3 +204,12 @@ body{background:#f5f7fa;color:var(--tg-ink)}
 .history-link-row summary{cursor:pointer;font-size:10px;color:#667085}
 .history-link-row iframe{width:100%;height:260px;margin-top:8px;border:1px solid #e6eaf0;border-radius:8px;background:#fff}
 @media(max-width:760px){.history-link-row iframe{height:210px}}
+
+/* Project grouping editor */
+.project-edit-box{margin-top:14px;padding-top:14px;border-top:1px solid #edf0f4}
+.inline-edit{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center}
+.inline-edit input,.inline-edit select{min-width:0}
+.project-alias-chips{display:flex;flex-wrap:wrap;gap:6px}
+.project-alias-chips span{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:999px;background:#f2f4f7;font-size:10px;color:#475467}
+.project-alias-chips button{border:0;background:transparent;color:#98a2b3;cursor:pointer;font-size:13px;line-height:1;padding:0}
+.project-alias-chips button:hover{color:#d92d20}
