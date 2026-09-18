@@ -61,35 +61,37 @@
   }
   renderProjects=function(){
     projectFilters();
-    const raw=db.projects||[],search=norm(ui.projectSearch);
-    window.TG_PROJECT_ALIASES=window.TG_PROJECT_ALIASES||{};
-    const projectTasks=p=>{
-      const aliases=(p._aliases||[p.name]).map(norm),ptokens=[...new Set(aliases.flatMap(projectNameTokens))];
-      return visibleWorkTasks().filter(t=>{
-        const tp=norm(t.project),tt=projectNameTokens(t.project);
-        if(aliases.includes(tp))return true;
-        return ptokens.some(a=>tt.some(b=>a===b||(a.length>=3&&b.length>=3&&(a.includes(b)||b.includes(a)))));
-      });
-    };
-    const all=mergeProjectCards(raw).filter(p=>projectTasks(p).length>0);
-    const filtered=all.filter(p=>{
-      const pt=projectTasks(p),people=pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).join(' '),titles=pt.map(t=>t.title).join(' '),aliases=(p._aliases||[]).join(' ');
-      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${aliases} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
+    const search=norm(ui.projectSearch),tasks=visibleWorkTasks().filter(t=>clean(t.project)&&clean(t.project)!=='확인 필요');
+    window.TG_PROJECT_ALIASES={};window.TG_WORKLOG_PROJECTS={};
+    const groups=new Map();
+    for(const t of tasks){
+      const key=norm(t.project);if(!key)continue;
+      if(!groups.has(key))groups.set(key,{name:clean(t.project),tasks:[]});
+      groups.get(key).tasks.push(t);
+    }
+    const all=[...groups.values()].map(g=>{
+      const exact=(db.projects||[]).find(p=>norm(p.name)===norm(g.name));
+      const id=exact?.id||('worklog_'+encodeURIComponent(norm(g.name)));
+      const p={...(exact||{}),id,name:g.name,category:exact?.category||'업무일지',status:exact?.status||'진행 중',customer:exact?.customer||'',sources:exact?.sources||[],_worklogTasks:g.tasks,_aliases:[g.name]};
+      window.TG_PROJECT_ALIASES[id]=[g.name];window.TG_WORKLOG_PROJECTS[id]=p;return p;
     });
-    const active=all.filter(p=>!doneStates.includes(clean(p.status))).length,review=all.filter(p=>/검토|확인/.test(clean(p.status))||!clean(p.category)).length,connected=all.filter(p=>p.driveFolderId||p.driveUrl||p.connectionStatus==='연결됨').length;
-    q('#projectMetrics').innerHTML=`<div class="metric"><b>${all.length}</b><span class="muted">전체 프로젝트</span></div><div class="metric priority"><b>${active}</b><span class="muted">진행 중</span></div><div class="metric review"><b>${review}</b><span class="muted">검토 필요</span></div><div class="metric good"><b>${connected}</b><span class="muted">Drive 연결</span></div>`;
-    q('#projectSourceState').innerHTML=`${sourceState(connection.data,'운영 데이터')} ${syncBadge()}`;
+    const filtered=all.filter(p=>{
+      const pt=p._worklogTasks||[],people=pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).join(' '),titles=pt.map(t=>t.title).join(' ');
+      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
+    });
+    const active=all.filter(p=>!doneStates.includes(clean(p.status))).length,review=all.filter(p=>/검토|확인/.test(clean(p.status))||!clean(p.category)).length,connected=all.filter(p=>(p.sources||[]).length||p.driveFolderId||p.driveUrl||p.connectionStatus==='연결됨').length;
+    q('#projectMetrics').innerHTML=`<div class="metric"><b>${all.length}</b><span class="muted">최근 1달 프로젝트·대분류</span></div><div class="metric priority"><b>${active}</b><span class="muted">진행 중</span></div><div class="metric review"><b>${review}</b><span class="muted">검토 필요</span></div><div class="metric good"><b>${connected}</b><span class="muted">연결 원본 있음</span></div>`;
+    q('#projectSourceState').innerHTML=`${sourceState(connection.tasks,'최근 30일 업무일지')} <span class="muted">프로젝트·담당자는 2026년 팀그릿 업무진행 계층을 기준으로 구성</span>`;
     const cats=['전체',...unique(all.map(p=>p.category)).slice(0,5)];
-    q('#catTabs').innerHTML=cats.map(c=>`<button data-cat="${esc(c)}" class="${c===ui.projectCategory?'active':''}">${esc(c==='전체'?'전체':c)}</button>`).join('');
+    q('#catTabs').innerHTML=cats.map(x=>`<button data-cat="${esc(x)}" class="${x===ui.projectCategory?'active':''}">${esc(x)}</button>`).join('');
     const perPage=24,totalPages=Math.max(1,Math.ceil(filtered.length/perPage));if(ui.projectPage>totalPages)ui.projectPage=totalPages;
     const pageItems=filtered.slice((ui.projectPage-1)*perPage,ui.projectPage*perPage);
-    q('#projectResultCount').textContent=`${filtered.length}개 프로젝트 · ${ui.projectPage}/${totalPages} 페이지`;
-    q('#projectList').innerHTML=connection.data?(filtered.length?`<div class="project-bento-grid">${pageItems.map(p=>{
-      const pt=projectTasks(p),open=pt.filter(t=>!isDone(t)),owners=[...new Set(pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).filter(Boolean))],sources=[...new Set((p.sources||[]).map(s=>s.id||s.url||s.title))].length;
-      window.TG_PROJECT_ALIASES[p.id]=p._aliases||[p.name];
+    q('#projectResultCount').textContent=`${filtered.length}개 프로젝트·대분류 · ${ui.projectPage}/${totalPages} 페이지`;
+    q('#projectList').innerHTML=filtered.length?`<div class="project-bento-grid">${pageItems.map(p=>{
+      const pt=p._worklogTasks||[],open=pt.filter(t=>!isDone(t)),owners=[...new Set(pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).filter(Boolean))],sources=[...new Set((p.sources||[]).map(s=>s.id||s.url||s.title))].length;
       const sample=open.slice(0,3).map(t=>`<div class="project-card-task"><span>${esc(clean(t.owner).split(/[,/·]/)[0]||'담당자')}</span><b>${esc(t.title||'')}</b></div>`).join('');
-      return `<button class="project-bento-card" data-project="${esc(p.id)}"><div class="project-bento-top"><span class="tag ${sources?'green':'amber'}">${sources?'원본 '+sources+'개':'원본 확인 필요'}</span><span class="project-card-count">${open.length}개 업무</span></div><div class="project-bento-title">${esc(p.name)}</div><div class="project-bento-sub">${esc(p.customer||p.category||'프로젝트')} · 담당자 ${owners.length}명</div><div class="project-card-owners">${owners.slice(0,5).map(o=>`<span>${esc(o)}</span>`).join('')}${owners.length>5?`<span>+${owners.length-5}</span>`:''}</div><div class="project-card-tasks">${sample||'<span class="muted">연결된 업무 없음</span>'}</div><div class="project-bento-footer"><span>${esc(p.status||'확인 필요')}</span><b>프로젝트 열기 →</b></div></button>`
-    }).join('')}</div><div class="project-pagination"><button class="btn" data-project-page="${ui.projectPage-1}" ${ui.projectPage<=1?'disabled':''}>이전</button><span>${ui.projectPage} / ${totalPages}</span><button class="btn" data-project-page="${ui.projectPage+1}" ${ui.projectPage>=totalPages?'disabled':''}>다음</button></div>`:empty('검색 조건에 맞는 프로젝트가 없습니다.')):empty('중앙 운영 데이터에 연결하면 프로젝트가 표시됩니다.');
+      return `<button class="project-bento-card" data-project="${esc(p.id)}"><div class="project-bento-top"><span class="tag ${sources?'green':''}">${sources?'원본 '+sources+'개':'업무일지 기준'}</span><span class="project-card-count">${open.length}개 업무</span></div><div class="project-bento-title">${esc(p.name)}</div><div class="project-bento-sub">${esc(p.customer||p.category||'업무일지')} · 담당자 ${owners.length}명</div><div class="project-card-owners">${owners.slice(0,6).map(o=>`<span>${esc(o)}</span>`).join('')}${owners.length>6?`<span>+${owners.length-6}</span>`:''}</div><div class="project-card-tasks">${sample}</div><div class="project-bento-footer"><span>${esc(p.status||'진행 중')}</span><b>프로젝트 열기 →</b></div></button>`
+    }).join('')}</div><div class="project-pagination"><button class="btn" data-project-page="${ui.projectPage-1}" ${ui.projectPage<=1?'disabled':''}>이전</button><span>${ui.projectPage} / ${totalPages}</span><button class="btn" data-project-page="${ui.projectPage+1}" ${ui.projectPage>=totalPages?'disabled':''}>다음</button></div>`:empty('최근 1달 업무일지에서 프로젝트·대분류가 확인되지 않았습니다.');
     q('#sourceOverview').innerHTML=connection.data?sourceOverview():empty('원본 데이터가 연결되지 않았습니다.');
     qa('[data-cat]').forEach(b=>b.onclick=()=>{ui.projectCategory=b.dataset.cat;ui.projectPage=1;if(q('#projectCategoryFilter'))q('#projectCategoryFilter').value=ui.projectCategory;renderProjects()});
     qa('[data-project-page]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.projectPage);if(n>=1&&n<=totalPages){ui.projectPage=n;renderProjects();window.scrollTo({top:q('#projectList')?.offsetTop||0,behavior:'smooth'})}});
