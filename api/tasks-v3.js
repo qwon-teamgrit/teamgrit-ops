@@ -113,20 +113,24 @@ async function primaryLinkedContext(token,section){
   return {text:chunks.join('\\n').slice(0,120000),sources:used};
 }
 
-function parseWorklogStructure(sectionText){
+function parseWorklogStructure(sectionText,{dedupe=true,includeCompleted=false}={}){
   const personNames=new Set(['김기령','강성일','임양성','김규원','백승윤','유하은','정해수','이재원','장재훈','박종현','김태성','태성','강민우','김승종']);
   const rows=String(sectionText||'').split(/\r?\n/).map((line,i)=>{const m=line.match(/^(\s*)\*\s+(.*)$/);return m?{i,indent:m[1].length,text:clean(m[2])}:null}).filter(Boolean);
-  const tasks=[],pairs=new Set();let owner='',ownerIndent=-1;const stack=[];
+  const tasks=[],pairs=new Set();let owner='',ownerIndent=-1,ignoredIndent=-1;const stack=[];
   const doneRe=/(완료됨|완료\.?$|확인 완료|전달 완료|발송 완료|송부 완료|주문 완료|수령 완료)/;
   const globalSkip=/^(주간 업무내용|사업본부|개발본부|시스템 개발팀|서비스 개발팀|컨텐츠 개발팀|선행기술 개발팀|공지사항|회의실|출장\/외근|휴가)/;
   const modeRe=/^(진행사항|계획사항)$/;
   for(let i=0;i<rows.length;i++){
     const r=rows[i],next=rows[i+1],nextIndent=next?next.indent:-1;
+    if(ignoredIndent>=0){
+      if(r.indent>ignoredIndent)continue;
+      ignoredIndent=-1;
+    }
     while(stack.length&&stack[stack.length-1].indent>=r.indent)stack.pop();
     const base=clean(r.text.split(/[\[(]/)[0]);
     if(personNames.has(base)){owner=base;ownerIndent=r.indent;stack.length=0;continue}
     if(!owner||r.indent<=ownerIndent)continue;
-    if(globalSkip.test(r.text))continue;
+    if(globalSkip.test(r.text)){if(nextIndent>r.indent)ignoredIndent=r.indent;continue}
     const path=[...stack.map(x=>x.text),r.text],meaningful=path.filter(x=>!modeRe.test(x));
     const project=clean((meaningful[0]||'').replace(/^\((.*?)\)$/,'$1').replace(/\s*\(.*?\)\s*/g,' '))||'확인 필요';
     if(project!=='확인 필요')pairs.add(norm(owner)+'|'+norm(project));
@@ -134,12 +138,31 @@ function parseWorklogStructure(sectionText){
     if(hasChild){stack.push({indent:r.indent,text:r.text});continue}
     if(modeRe.test(r.text)||r.text.length<3)continue;
     const mode=path.find(x=>modeRe.test(x))||'';
-    if(doneRe.test(r.text)&&mode==='진행사항')continue;
-    tasks.push({title:r.text,project,owner,dueDate:'',status:mode==='계획사항'?'예정':'진행 중',evidence:`${owner} > ${path.join(' > ')}`,sourceIds:[]});
+    const completed=doneRe.test(r.text)&&mode==='진행사항';
+    if(completed&&!includeCompleted)continue;
+    tasks.push({title:r.text,project,owner,dueDate:'',status:completed?'완료':(mode==='계획사항'?'예정':'진행 중'),evidence:`${owner} > ${path.join(' > ')}`,sourceIds:[]});
   }
-  return {tasks:dedupePrimaryTasks(tasks),pairs};
+  return {tasks:dedupe?dedupePrimaryTasks(tasks):tasks,pairs};
 }
 function parsePrimaryTasksDeterministic(sectionText){return parseWorklogStructure(sectionText).tasks}
+function worklogPeriods(text=''){
+  const lines=String(text||'').split(/\r?\n/),out=[];let current=null,buf=[];
+  const isHeader=line=>/^\d{4}\/\d{1,2}\/\d{1,2}.*?-\s*\d{1,2}\/\d{1,2}/.test(clean(line));
+  const flush=()=>{if(current&&buf.length)out.push({period:current,text:buf.join('\n')});buf=[]};
+  for(const line of lines){if(isHeader(line)){flush();current=clean(line);buf=[line]}else if(current)buf.push(line)}
+  flush();return out;
+}
+function parseAllWorklogHistory(text=''){
+  const out=[];
+  for(const part of worklogPeriods(text)){for(const t of parseWorklogStructure(part.text,{dedupe:false,includeCompleted:true}).tasks)out.push({...t,period:part.period})}
+  return out;
+}
+function projectEquivalent(a,b){
+  const na=norm(a),nb=norm(b);if(!na||!nb)return false;if(na===nb)return true;
+  const ta=projectTokens(a),tb=projectTokens(b);if(!ta.length||!tb.length)return false;
+  const exact=ta.filter(x=>tb.includes(x)).length,coverage=exact/Math.min(ta.length,tb.length);
+  return exact>=1&&coverage>=0.75;
+}
 
 function projectTokens(v=''){return [...new Set(norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','진행','운영','관련','기타'].includes(x)))]}
 function canonicalProjectName(raw,_title,projects){
@@ -283,6 +306,24 @@ ${sourceBodies||'직접 읽은 원문 본문 없음'}
 [기존 관련 결과물]
 ${priorResults||'기존 관련 결과물 없음'}`}
 async function generateResult(req,res){const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const b=await readBody(req),taskId=clean(b.task_id||b.id),preferredKind=normalizeResultKind(b.kind||'auto');if(!taskId)return json(res,400,{error:'task_id_required'});const task=await taskById(token,taskId);if(!task)return json(res,404,{error:'task_not_found'});const instruction=clean(b.instruction),ctx=await context(token,[task.title,task.project,task.source,instruction].join(' ')),detail=await detailedSourceContext(token,task,ctx),prior=(await central.list(token,'Results').catch(()=>[])).filter(r=>clean(r.project_id)===clean(task.project)||clean(r.task_id)===taskId).slice(-6).map(r=>`[RESULT] ${clean(r.title)} | ${clean(r.type)}\n${clean(r.content).slice(0,5000)}`).join('\n\n');const ai=await gemini(resultPrompt(task,ctx,preferredKind,detail.text,instruction,prior));const d=ai.data||{},kind=normalizeResultKind(d.kind||preferredKind)==='auto'?'document':normalizeResultKind(d.kind||preferredKind),type=clean(d.type)||kind,title=clean(d.title)||`${clean(task.title)} 결과물 초안`,content=clean(d.content),summary=clean(d.summary),artifact=d.artifactData||{};if(!content&&!Object.keys(artifact).length)return json(res,500,{error:'result_generation_empty'});let result=central.result({projectId:clean(task.project),taskId,type,title,fileUrl:'',status:'초안',content,reviewStatus:'검토 대기',sourceTaskId:taskId,artifactKind:kind,artifactData:artifact,executorStatus:'검토 대기'});const fileKinds=new Set(['document','research','spreadsheet','presentation','pdf']);if(fileKinds.has(kind)){try{const materialized=await materializeResult(token,result);result={...result,file_url:materialized.url||'',executor_status:materialized.status||'초안 파일 생성 완료'};}catch(e){const msg=String(e?.message||e).slice(0,300);result={...result,executor_status:'파일 생성 실패: '+msg};}}else if(kind==='image'||kind==='design'){result={...result,executor_status:'이미지 생성기 연결 필요'};}else if(kind==='code'){result={...result,executor_status:'코드 실행기 연결 필요'};}await central.append(token,'Results',[result]);const requestedBy=await central.userEmail(token),review=central.reviewRequest({targetType:'Result',targetId:result.result_id,taskId,project:clean(task.project),title,status:'검토 대기',requestedBy,note:summary});await central.append(token,'ReviewRequests',[review]);return json(res,200,{ok:true,result,review,modelUsed:ai.modelUsed,kind,sourceBodyCount:detail.used,fileError:/^파일 생성 실패/.test(result.executor_status||'')?result.executor_status:''});}
+async function projectHistory(req,res){
+  const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});
+  const u=new URL(req.url,`https://${req.headers.host}`),project=clean(u.searchParams.get('project'));if(!project)return json(res,400,{error:'project_required'});
+  const main=await readFile(token,{id:WORK_DOC_ID,mimeType:'application/vnd.google-apps.document',name:'2026년 팀그릿 업무진행'});
+  const all=parseAllWorklogHistory(main.text||'').filter(t=>projectEquivalent(t.project,project));
+  const [stored,sources]=await Promise.all([central.list(token,'Tasks').catch(()=>[]),sheetRows(token,'Sources','A1:O5000').catch(()=>[])]);
+  const sourceMap=new Map(sources.map(s=>[sourceId(s),{title:sourceTitle(s),url:clean(s.url)}]));
+  const enriched=all.map((t,idx)=>{
+    const match=stored.find(x=>projectEquivalent(x.project,t.project)&&norm(x.owner)===norm(t.owner)&&taskSimilarity(x.title,t.title)>=.72);
+    const links=[{label:'업무 진행 원문',url:`https://docs.google.com/document/d/${WORK_DOC_ID}/edit`,kind:'source'}];
+    if(match?.source_url)links.push({label:'연결 원본',url:clean(match.source_url),kind:'source'});
+    if(match?.result_url)links.push({label:clean(match.result_title)||'결과물',url:clean(match.result_url),kind:'result'});
+    for(const id of String(match?.source_ids||'').split(/[\s,;|]+/).filter(Boolean)){const s=sourceMap.get(id);if(s?.url)links.push({label:s.title||'연결 자료',url:s.url,kind:'source'})}
+    const uniq=[...new Map(links.filter(x=>x.url).map(x=>[x.url,x])).values()];
+    return {...t,id:`hist_${idx}_${central.id('h',t.period+'|'+t.owner+'|'+t.project+'|'+t.title)}`,links:uniq};
+  });
+  return json(res,200,{project,count:enriched.length,tasks:enriched});
+}
 async function listReviews(req,res){const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const [results,reviews]=await Promise.all([central.list(token,'Results'),central.list(token,'ReviewRequests')]);const visible=results.filter(r=>['검토 대기','수정 필요'].includes(clean(r.review_status))||((clean(r.artifact_kind)==='image'||clean(r.artifact_kind)==='design')&&clean(r.review_status)==='승인됨')).sort((a,b)=>String(b.updated_at||b.created_at).localeCompare(String(a.updated_at||a.created_at)));return json(res,200,{results:visible,reviews,allResults:results});}
 
 function driveFileIdFromUrl(v=''){for(const re of [/\/document\/d\/([A-Za-z0-9_-]+)/,/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/,/\/presentation\/d\/([A-Za-z0-9_-]+)/,/\/file\/d\/([A-Za-z0-9_-]+)/,/id=([A-Za-z0-9_-]+)/]){const m=String(v).match(re);if(m)return m[1]}return ''}
@@ -298,4 +339,4 @@ async function deleteResult(req,res){
 }
 async function reviewResult(req,res){const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const b=await readBody(req),resultId=clean(b.result_id||b.id),action=clean(b.action);if(!resultId)return json(res,400,{error:'result_id_required'});const results=await central.list(token,'Results'),idx=results.findIndex(r=>clean(r.result_id)===resultId);if(idx<0)return json(res,404,{error:'result_not_found'});const now=new Date().toISOString(),reviewer=await central.userEmail(token),r={...results[idx]};if(b.content!==undefined)r.content=String(b.content);if(b.title!==undefined)r.title=clean(b.title);if(b.artifactData!==undefined)r.artifact_data=typeof b.artifactData==='string'?b.artifactData:JSON.stringify(b.artifactData||{});r.updated_at=now;let materialized=null;if(action==='approve'){materialized=clean(r.file_url)?{kind:clean(r.artifact_kind),url:clean(r.file_url),status:'초안 파일 승인·확정'}:await materializeResult(token,r);r.review_status='승인됨';r.status='완료';r.approved_by=reviewer;r.approved_at=now;r.executor_status=materialized.status||'확정';if(materialized.url)r.file_url=materialized.url}else if(action==='request_changes'){r.review_status='수정 필요';r.status='초안';r.executor_status='수정 대기'}else return json(res,400,{error:'invalid_review_action'});results[idx]=r;await central.replace(token,'Results',results);const reviews=await central.list(token,'ReviewRequests'),ri=reviews.findIndex(x=>clean(x.target_id)===resultId&&['검토 대기','수정 필요'].includes(clean(x.status)));if(ri>=0){reviews[ri]={...reviews[ri],status:action==='approve'?'승인됨':'수정 필요',reviewed_by:reviewer,reviewed_at:now,note:clean(b.note)||reviews[ri].note};await central.replace(token,'ReviewRequests',reviews)}if(action==='approve'){const approval=central.approval({targetType:'Result',targetId:resultId,action:'결과물 승인·확정',approvedBy:reviewer,source:'앱 내부 검토함',note:`${clean(r.title)} · ${clean(r.artifact_kind)}`});await central.append(token,'Approvals',[approval])}return json(res,200,{ok:true,result:r,materialized});}
 
-module.exports=async(req,res)=>{try{const u=new URL(req.url,`https://${req.headers.host}`),action=u.searchParams.get('action');if(req.method==='POST'&&action==='analyze')return await analyze(req,res);if(req.method==='POST'&&action==='sync-primary')return await syncPrimaryTasks(req,res);if(req.method==='POST'&&action==='generate-result')return await generateResult(req,res);if(req.method==='GET'&&action==='reviews')return await listReviews(req,res);if(req.method==='POST'&&action==='review-result')return await reviewResult(req,res);if(req.method==='POST'&&action==='delete-result')return await deleteResult(req,res);return base(req,res)}catch(e){return json(res,500,{error:e.message,connection:'연결 안 됨'})}};
+module.exports=async(req,res)=>{try{const u=new URL(req.url,`https://${req.headers.host}`),action=u.searchParams.get('action');if(req.method==='POST'&&action==='analyze')return await analyze(req,res);if(req.method==='POST'&&action==='sync-primary')return await syncPrimaryTasks(req,res);if(req.method==='POST'&&action==='generate-result')return await generateResult(req,res);if(req.method==='GET'&&action==='project-history')return await projectHistory(req,res);if(req.method==='GET'&&action==='reviews')return await listReviews(req,res);if(req.method==='POST'&&action==='review-result')return await reviewResult(req,res);if(req.method==='POST'&&action==='delete-result')return await deleteResult(req,res);return base(req,res)}catch(e){return json(res,500,{error:e.message,connection:'연결 안 됨'})}};
