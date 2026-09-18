@@ -1,6 +1,7 @@
 require('./_lib/gemini-model-compat')();
 const base=require('./tasks-v2');
 const central=require('./_lib/central-entities');
+const phase2=require('./_lib/task-phase2');
 const {gemini,clean,arr,readFile,WORK_DOC_ID}=require('./_lib/source-corpus-all');
 
 const OPS=process.env.OPS_DATA_SHEET_ID||'1Gfs2mC9_b7_u7sGIDC74WD-GUTLJy8JqBhSXwlzN_Uk';
