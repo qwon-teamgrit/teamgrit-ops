@@ -66,7 +66,20 @@
     ui.taskProject=q('#taskProjectFilter')?.value||'전체';ui.taskOwner=q('#taskOwnerFilter')?.value||'전체';ui.taskStatus=q('#taskStatusFilter')?.value||'전체';
   }
   function statusOptions(value){return [...new Set([value,...taskStates].filter(Boolean))].map(v=>`<option ${v===value?'selected':''}>${esc(v)}</option>`).join('')}
-  function taskRows(tasks){return tasks.map(t=>`<div class="task-row" data-task-row="${esc(taskId(t))}"><div class="task-main"><button class="task-title-btn" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">${esc(t.title||'이름 없는 업무')}</button><span class="task-source">${esc(t.origin_type||t.source||'기존 중앙 업무')}</span>${t.duplicate_of?`<span class="tag amber">중복 의심</span>`:''}</div><span class="task-cell task-project">${esc(t.project||'확인 필요')}</span><span class="task-cell task-owner">${esc(t.owner||'확인 필요')}</span><span class="task-cell task-due ${isOverdue(t)?'overdue':''}">${esc(fmtShort(taskDue(t)))}</span><span class="task-status"><select class="task-status-select" aria-label="${esc(t.title)} 상태" onchange="updateTaskStatus('${encodeURIComponent(taskId(t))}',this.value)">${statusOptions(clean(t.status)||'예정')}</select></span><button class="task-more" aria-label="업무 상세" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">•••</button></div>`).join('')}
+  function taskRows(tasks){return tasks.map(t=>`<div class="task-row task-row-nested" data-task-row="${esc(taskId(t))}"><div class="task-main"><button class="task-title-btn" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">${esc(t.title||'이름 없는 업무')}</button><span class="task-source">${esc(t.origin_detail||t.origin_type||t.source||'2026년 팀그릿 업무진행')}</span>${t.duplicate_of?`<span class="tag amber">중복 의심</span>`:''}</div><span class="task-cell task-due ${isOverdue(t)?'overdue':''}">${esc(fmtShort(taskDue(t)))}</span><span class="task-status"><select class="task-status-select" aria-label="${esc(t.title)} 상태" onchange="updateTaskStatus('${encodeURIComponent(taskId(t))}',this.value)">${statusOptions(clean(t.status)||'예정')}</select></span><button class="task-more" aria-label="업무 상세" onclick="openTaskDrawer('${encodeURIComponent(taskId(t))}')">•••</button></div>`).join('')}
+  function taskHierarchy(tasks){
+    const projects=new Map();
+    for(const t of tasks){
+      const project=clean(t.project)||'프로젝트 확인 필요',owner=clean(t.owner)||'담당자 확인 필요';
+      if(!projects.has(project))projects.set(project,new Map());
+      const owners=projects.get(project);if(!owners.has(owner))owners.set(owner,[]);owners.get(owner).push(t);
+    }
+    return [...projects.entries()].sort((a,b)=>a[0].localeCompare(b[0],'ko')).map(([project,owners])=>{
+      const projectCount=[...owners.values()].reduce((n,x)=>n+x.length,0);
+      const ownerHtml=[...owners.entries()].sort((a,b)=>a[0].localeCompare(b[0],'ko')).map(([owner,ownerTasks])=>`<section class="task-owner-group"><div class="task-owner-head"><div><span class="task-owner-avatar">${esc(owner.slice(0,1))}</span><b>${esc(owner)}</b></div><span class="task-group-count">${ownerTasks.length}개</span></div><div class="task-owner-list">${taskRows(ownerTasks)}</div></section>`).join('');
+      return `<section class="task-project-group"><div class="task-project-head"><div><span class="task-project-kicker">PROJECT</span><b>${esc(project)}</b></div><span class="task-group-count">${projectCount}개 업무 · ${owners.size}명</span></div>${ownerHtml}</section>`;
+    }).join('');
+  }
   renderWork=function(){
     const tasks=visibleWorkTasks(),hiddenLegacy=(db.tasks||[]).length-tasks.length,open=tasks.filter(t=>!isDone(t)),review=open.filter(needsReview),done=tasks.filter(isDone),late=open.filter(isOverdue);
     q('#workSourceState').innerHTML=`${sourceState(connection.tasks,'업무 중앙 데이터')} <span class="tag green">메인: 2026년 팀그릿 업무진행</span> ${syncBadge()} <button class="btn" onclick="syncPrimaryWorkTasks()">업무 원본 다시 읽기</button>${window.primaryTaskSyncMeta?` <span class="muted">${esc(window.primaryTaskSyncMeta.week||'')} · 연결 Drive ${esc(window.primaryTaskSyncMeta.linkedSourceCount||0)}개</span>`:''}${hiddenLegacy?` <span class="muted">기존 출처 불명 업무 ${hiddenLegacy}개는 처리 목록에서 제외</span>`:''}${window.primaryTaskSyncError?` <span class="tag amber">${esc(window.primaryTaskSyncError)}</span>`:''}`;
@@ -75,7 +88,7 @@
     qa('[data-work-tab]').forEach(b=>b.classList.toggle('active',b.dataset.workTab===ui.workTab));
     taskFilters();const search=norm(ui.taskSearch),filtered=tasks.filter(t=>taskMatchesTab(t)&&(ui.taskProject==='전체'||clean(t.project)===ui.taskProject)&&(ui.taskOwner==='전체'||clean(t.owner)===ui.taskOwner)&&(ui.taskStatus==='전체'||clean(t.status)===ui.taskStatus)&&(!search||norm(`${t.title} ${t.project} ${t.owner} ${t.source}`).includes(search))).sort((a,b)=>Number(isOverdue(b))-Number(isOverdue(a))||dueTime(a)-dueTime(b));
     q('#taskResultCount').textContent=`${filtered.length}개 업무`;
-    q('#registeredTasks').innerHTML=connection.tasks?(filtered.length?taskRows(filtered):empty('이 조건에서 처리할 업무가 없습니다.')):empty('업무 중앙 데이터에 연결하면 업무가 표시됩니다.');
+    q('#registeredTasks').innerHTML=connection.tasks?(filtered.length?taskHierarchy(filtered):empty('이 조건에서 처리할 업무가 없습니다.')):empty('업무 중앙 데이터에 연결하면 업무가 표시됩니다.');
     setNavCount();updateCandidateCount();
   };
 
