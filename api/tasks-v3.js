@@ -306,16 +306,45 @@ ${sourceBodies||'직접 읽은 원문 본문 없음'}
 [기존 관련 결과물]
 ${priorResults||'기존 관련 결과물 없음'}`}
 async function generateResult(req,res){const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});const b=await readBody(req),taskId=clean(b.task_id||b.id),preferredKind=normalizeResultKind(b.kind||'auto');if(!taskId)return json(res,400,{error:'task_id_required'});const task=await taskById(token,taskId);if(!task)return json(res,404,{error:'task_not_found'});const instruction=clean(b.instruction),ctx=await context(token,[task.title,task.project,task.source,instruction].join(' ')),detail=await detailedSourceContext(token,task,ctx),prior=(await central.list(token,'Results').catch(()=>[])).filter(r=>clean(r.project_id)===clean(task.project)||clean(r.task_id)===taskId).slice(-6).map(r=>`[RESULT] ${clean(r.title)} | ${clean(r.type)}\n${clean(r.content).slice(0,5000)}`).join('\n\n');const ai=await gemini(resultPrompt(task,ctx,preferredKind,detail.text,instruction,prior));const d=ai.data||{},kind=normalizeResultKind(d.kind||preferredKind)==='auto'?'document':normalizeResultKind(d.kind||preferredKind),type=clean(d.type)||kind,title=clean(d.title)||`${clean(task.title)} 결과물 초안`,content=clean(d.content),summary=clean(d.summary),artifact=d.artifactData||{};if(!content&&!Object.keys(artifact).length)return json(res,500,{error:'result_generation_empty'});let result=central.result({projectId:clean(task.project),taskId,type,title,fileUrl:'',status:'초안',content,reviewStatus:'검토 대기',sourceTaskId:taskId,artifactKind:kind,artifactData:artifact,executorStatus:'검토 대기'});const fileKinds=new Set(['document','research','spreadsheet','presentation','pdf']);if(fileKinds.has(kind)){try{const materialized=await materializeResult(token,result);result={...result,file_url:materialized.url||'',executor_status:materialized.status||'초안 파일 생성 완료'};}catch(e){const msg=String(e?.message||e).slice(0,300);result={...result,executor_status:'파일 생성 실패: '+msg};}}else if(kind==='image'||kind==='design'){result={...result,executor_status:'이미지 생성기 연결 필요'};}else if(kind==='code'){result={...result,executor_status:'코드 실행기 연결 필요'};}await central.append(token,'Results',[result]);const requestedBy=await central.userEmail(token),review=central.reviewRequest({targetType:'Result',targetId:result.result_id,taskId,project:clean(task.project),title,status:'검토 대기',requestedBy,note:summary});await central.append(token,'ReviewRequests',[review]);return json(res,200,{ok:true,result,review,modelUsed:ai.modelUsed,kind,sourceBodyCount:detail.used,fileError:/^파일 생성 실패/.test(result.executor_status||'')?result.executor_status:''});}
+async function workDocParagraphLinks(token){
+  const doc=await gf(token,`https://docs.googleapis.com/v1/documents/${WORK_DOC_ID}?includeTabsContent=true`).catch(()=>null);if(!doc)return[];
+  const out=[];
+  function walk(content=[]){for(const b of content){
+    if(b.paragraph){
+      let text='',links=[];
+      for(const e of b.paragraph.elements||[]){const s=e.textRun?.content||'';text+=s;const u=e.textRun?.textStyle?.link?.url;if(u)links.push(u)}
+      text=clean(text);if(text&&links.length)out.push({text,links:[...new Set(links)]});
+    }
+    for(const row of b.table?.tableRows||[])for(const cell of row.tableCells||[])walk(cell.content||[]);
+  }}
+  walk(doc.body?.content||[]);for(const tab of doc.tabs||[])walk(tab.documentTab?.body?.content||[]);
+  return out;
+}
+function linksForHistoryTask(task,paragraphs){
+  const title=norm(task.title),evidence=norm(task.evidence),scored=[];
+  for(const p of paragraphs){
+    const pt=norm(p.text);if(!pt)continue;
+    let score=0;
+    if(title&&pt.includes(title))score+=10;
+    if(title&&title.includes(pt)&&pt.length>=6)score+=4;
+    score+=Math.round(taskSimilarity(task.title,p.text)*5);
+    if(evidence&&evidence.includes(pt)&&pt.length>=6)score+=2;
+    if(score>=4)scored.push({score,...p});
+  }
+  scored.sort((a,b)=>b.score-a.score);
+  return [...new Set(scored.slice(0,3).flatMap(x=>x.links))];
+}
 async function projectHistory(req,res){
   const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});
   const u=new URL(req.url,`https://${req.headers.host}`),project=clean(u.searchParams.get('project'));if(!project)return json(res,400,{error:'project_required'});const aliases=[project,...String(u.searchParams.get('aliases')||'').split('|').map(clean).filter(Boolean)];
   const main=await readFile(token,{id:WORK_DOC_ID,mimeType:'application/vnd.google-apps.document',name:'2026년 팀그릿 업무진행'});
-  const all=parseAllWorklogHistory(main.text||'').filter(t=>aliases.some(a=>projectEquivalent(t.project,a)));
-  const [stored,sources]=await Promise.all([central.list(token,'Tasks').catch(()=>[]),sheetRows(token,'Sources','A1:O5000').catch(()=>[])]);
+  const all=parseAllWorklogHistory(main.text||'').filter(t=>aliases.some(a=>projectEquivalent(t.project,a)||norm(t.title).includes(norm(a))));
+  const [stored,sources,paragraphLinks]=await Promise.all([central.list(token,'Tasks').catch(()=>[]),sheetRows(token,'Sources','A1:O5000').catch(()=>[]),workDocParagraphLinks(token)]);
   const sourceMap=new Map(sources.map(s=>[sourceId(s),{title:sourceTitle(s),url:clean(s.url)}]));
   const enriched=all.map((t,idx)=>{
-    const match=stored.find(x=>projectEquivalent(x.project,t.project)&&norm(x.owner)===norm(t.owner)&&taskSimilarity(x.title,t.title)>=.72);
+    const match=stored.find(x=>(projectEquivalent(x.project,t.project)||aliases.some(a=>norm(x.title).includes(norm(a))))&&norm(x.owner)===norm(t.owner)&&taskSimilarity(x.title,t.title)>=.62);
     const links=[{label:'업무 진행 원문',url:`https://docs.google.com/document/d/${WORK_DOC_ID}/edit`,kind:'source'}];
+    for(const u of linksForHistoryTask(t,paragraphLinks))links.push({label:'업무에 연결된 링크',url:u,kind:'source'});
     if(match?.source_url)links.push({label:'연결 원본',url:clean(match.source_url),kind:'source'});
     if(match?.result_url)links.push({label:clean(match.result_title)||'결과물',url:clean(match.result_url),kind:'result'});
     for(const id of String(match?.source_ids||'').split(/[\s,;|]+/).filter(Boolean)){const s=sourceMap.get(id);if(s?.url)links.push({label:s.title||'연결 자료',url:s.url,kind:'source'})}
