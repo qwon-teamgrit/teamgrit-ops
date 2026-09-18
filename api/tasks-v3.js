@@ -135,12 +135,17 @@ function dedupePrimaryTasks(tasks){
   const out=[];
   for(const t of tasks){
     if(!clean(t.title)||!clean(t.owner))continue;
-    let dup=false;
+    let merged=null;
     for(const e of out){
-      const sameOwner=norm(e.owner)===norm(t.owner),sameProject=!clean(e.project)||!clean(t.project)||norm(e.project)===norm(t.project);
-      if(sameOwner&&sameProject&&taskSimilarity(e.title,t.title)>=.72){dup=true;break}
+      const sameProject=!clean(e.project)||!clean(t.project)||norm(e.project)===norm(t.project);
+      if(sameProject&&taskSimilarity(e.title,t.title)>=.72){merged=e;break}
     }
-    if(!dup)out.push(t);
+    if(!merged){out.push({...t});continue}
+    const owners=[...new Set([...(clean(merged.owner).split(/[,/·]/).map(clean).filter(Boolean)),...(clean(t.owner).split(/[,/·]/).map(clean).filter(Boolean))])];
+    merged.owner=owners.join(', ');
+    merged.evidence=[clean(merged.evidence),clean(t.evidence)].filter(Boolean).join(' | ');
+    merged.sourceIds=[...new Set([...(merged.sourceIds||[]),...(t.sourceIds||[])])];
+    if(!clean(merged.dueDate)&&clean(t.dueDate))merged.dueDate=t.dueDate;
   }
   return out;
 }
