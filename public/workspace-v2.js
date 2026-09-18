@@ -1,5 +1,5 @@
 (()=>{
-  const ui={projectSearch:'',projectCategory:'전체',projectStatus:'전체',workTab:'open',taskSearch:'',taskProject:'전체',taskOwner:'전체',taskStatus:'전체'};
+  const ui={projectSearch:'',projectCategory:'전체',projectStatus:'전체',projectPage:1,workTab:'open',taskSearch:'',taskProject:'전체',taskOwner:'전체',taskStatus:'전체'};
   const doneStates=['완료','완료됨','폐기됨','드랍'];
   const taskStates=['예정','진행 전','진행 중','검토 대기','보류','완료'];
   const q=s=>document.querySelector(s);
@@ -24,6 +24,22 @@
   function unique(values){return [...new Set(values.map(clean).filter(v=>v&&v!=='확인 필요'))].sort((a,b)=>a.localeCompare(b,'ko'))}
   function fillSelect(el,values,allLabel,current){if(!el)return;const selected=current||el.value||'전체';el.innerHTML=`<option value="전체">${esc(allLabel)}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');el.value=values.includes(selected)?selected:'전체'}
   function empty(message){return `<div class="empty">${esc(message)}</div>`}
+  function projectNameTokens(v){return [...new Set(norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','운영','시스템','관련'].includes(x)))]}
+  function mergeProjectCards(projects){
+    const groups=[];
+    for(const p of projects){
+      const tokens=projectNameTokens(p.name),existing=groups.find(g=>{
+        const gt=projectNameTokens(g.name);
+        return tokens.some(t=>gt.includes(t)||gt.some(x=>x.includes(t)||t.includes(x)));
+      });
+      if(!existing){groups.push({...p,_aliases:[p.name],_members:[p]});continue}
+      existing._aliases=[...new Set([...(existing._aliases||[]),p.name])];
+      existing._members=[...(existing._members||[]),p];
+      existing.sources=[...((existing.sources)||[]),...((p.sources)||[])];
+      if((p.name||'').length<(existing.name||'').length)existing.name=p.name;
+    }
+    return groups;
+  }
   function setNavCount(){const count=visibleWorkTasks().filter(t=>!isDone(t)).length,el=q('#navWorkCount');if(!el)return;el.textContent=count;el.classList.toggle('hidden',count===0)}
 
   renderDash=function(){
@@ -45,26 +61,30 @@
   }
   renderProjects=function(){
     projectFilters();
-    const all=db.projects||[],search=norm(ui.projectSearch);
-    const projectTasks=p=>visibleWorkTasks().filter(t=>norm(t.project)===norm(p.name));
+    const raw=db.projects||[],all=mergeProjectCards(raw),search=norm(ui.projectSearch);
+    window.TG_PROJECT_ALIASES=window.TG_PROJECT_ALIASES||{};
+    const projectTasks=p=>{const aliases=new Set((p._aliases||[p.name]).map(norm));return visibleWorkTasks().filter(t=>aliases.has(norm(t.project)))};
     const filtered=all.filter(p=>{
-      const pt=projectTasks(p),people=pt.map(t=>t.owner).join(' '),titles=pt.map(t=>t.title).join(' ');
-      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
+      const pt=projectTasks(p),people=pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).join(' '),titles=pt.map(t=>t.title).join(' '),aliases=(p._aliases||[]).join(' ');
+      return (ui.projectCategory==='전체'||clean(p.category)===ui.projectCategory)&&(ui.projectStatus==='전체'||clean(p.status)===ui.projectStatus)&&(!search||norm(`${p.name} ${aliases} ${p.customer} ${p.category} ${people} ${titles}`).includes(search));
     });
     const active=all.filter(p=>!doneStates.includes(clean(p.status))).length,review=all.filter(p=>/검토|확인/.test(clean(p.status))||!clean(p.category)).length,connected=all.filter(p=>p.driveFolderId||p.driveUrl||p.connectionStatus==='연결됨').length;
     q('#projectMetrics').innerHTML=`<div class="metric"><b>${all.length}</b><span class="muted">전체 프로젝트</span></div><div class="metric priority"><b>${active}</b><span class="muted">진행 중</span></div><div class="metric review"><b>${review}</b><span class="muted">검토 필요</span></div><div class="metric good"><b>${connected}</b><span class="muted">Drive 연결</span></div>`;
     q('#projectSourceState').innerHTML=`${sourceState(connection.data,'운영 데이터')} ${syncBadge()}`;
     const cats=['전체',...unique(all.map(p=>p.category)).slice(0,5)];
     q('#catTabs').innerHTML=cats.map(c=>`<button data-cat="${esc(c)}" class="${c===ui.projectCategory?'active':''}">${esc(c==='전체'?'전체':c)}</button>`).join('');
-    q('#projectResultCount').textContent=`${filtered.length}개 프로젝트`;
-    q('#projectList').innerHTML=connection.data?(filtered.length?`<div class="project-bento-grid">${filtered.map((p,i)=>{
-      const pt=projectTasks(p),open=pt.filter(t=>!isDone(t)),owners=[...new Set(pt.map(t=>clean(t.owner)).filter(Boolean))],sources=(p.sources||[]).length;
-      const sample=open.slice(0,3).map(t=>`<div class="project-card-task"><span>${esc(t.owner||'담당자 확인 필요')}</span><b>${esc(t.title||'')}</b></div>`).join('');
-      const sizeClass=(i%5===0||open.length>=5)?'project-card-wide':'';
-      return `<button class="project-bento-card ${sizeClass}" data-project="${esc(p.id)}"><div class="project-bento-top"><span class="tag ${sources?'green':'amber'}">${sources?'원본 '+sources+'개':'원본 확인 필요'}</span><span class="project-card-count">${open.length}개 업무</span></div><div class="project-bento-title">${esc(p.name)}</div><div class="project-bento-sub">${esc(p.customer||p.category||'프로젝트')} · 담당자 ${owners.length}명</div><div class="project-card-owners">${owners.slice(0,5).map(o=>`<span>${esc(o)}</span>`).join('')}${owners.length>5?`<span>+${owners.length-5}</span>`:''}</div><div class="project-card-tasks">${sample||'<span class="muted">연결된 업무 없음</span>'}</div><div class="project-bento-footer"><span>${esc(p.status||'확인 필요')}</span><b>프로젝트 열기 →</b></div></button>`
-    }).join('')}</div>`:empty('검색 조건에 맞는 프로젝트가 없습니다.')):empty('중앙 운영 데이터에 연결하면 프로젝트가 표시됩니다.');
+    const perPage=24,totalPages=Math.max(1,Math.ceil(filtered.length/perPage));if(ui.projectPage>totalPages)ui.projectPage=totalPages;
+    const pageItems=filtered.slice((ui.projectPage-1)*perPage,ui.projectPage*perPage);
+    q('#projectResultCount').textContent=`${filtered.length}개 프로젝트 · ${ui.projectPage}/${totalPages} 페이지`;
+    q('#projectList').innerHTML=connection.data?(filtered.length?`<div class="project-bento-grid">${pageItems.map(p=>{
+      const pt=projectTasks(p),open=pt.filter(t=>!isDone(t)),owners=[...new Set(pt.flatMap(t=>clean(t.owner).split(/[,/·]/).map(clean)).filter(Boolean))],sources=[...new Set((p.sources||[]).map(s=>s.id||s.url||s.title))].length;
+      window.TG_PROJECT_ALIASES[p.id]=p._aliases||[p.name];
+      const sample=open.slice(0,3).map(t=>`<div class="project-card-task"><span>${esc(clean(t.owner).split(/[,/·]/)[0]||'담당자')}</span><b>${esc(t.title||'')}</b></div>`).join('');
+      return `<button class="project-bento-card" data-project="${esc(p.id)}"><div class="project-bento-top"><span class="tag ${sources?'green':'amber'}">${sources?'원본 '+sources+'개':'원본 확인 필요'}</span><span class="project-card-count">${open.length}개 업무</span></div><div class="project-bento-title">${esc(p.name)}</div><div class="project-bento-sub">${esc(p.customer||p.category||'프로젝트')} · 담당자 ${owners.length}명</div><div class="project-card-owners">${owners.slice(0,5).map(o=>`<span>${esc(o)}</span>`).join('')}${owners.length>5?`<span>+${owners.length-5}</span>`:''}</div><div class="project-card-tasks">${sample||'<span class="muted">연결된 업무 없음</span>'}</div><div class="project-bento-footer"><span>${esc(p.status||'확인 필요')}</span><b>프로젝트 열기 →</b></div></button>`
+    }).join('')}</div><div class="project-pagination"><button class="btn" data-project-page="${ui.projectPage-1}" ${ui.projectPage<=1?'disabled':''}>이전</button><span>${ui.projectPage} / ${totalPages}</span><button class="btn" data-project-page="${ui.projectPage+1}" ${ui.projectPage>=totalPages?'disabled':''}>다음</button></div>`:empty('검색 조건에 맞는 프로젝트가 없습니다.')):empty('중앙 운영 데이터에 연결하면 프로젝트가 표시됩니다.');
     q('#sourceOverview').innerHTML=connection.data?sourceOverview():empty('원본 데이터가 연결되지 않았습니다.');
-    qa('[data-cat]').forEach(b=>b.onclick=()=>{ui.projectCategory=b.dataset.cat;if(q('#projectCategoryFilter'))q('#projectCategoryFilter').value=ui.projectCategory;renderProjects()});
+    qa('[data-cat]').forEach(b=>b.onclick=()=>{ui.projectCategory=b.dataset.cat;ui.projectPage=1;if(q('#projectCategoryFilter'))q('#projectCategoryFilter').value=ui.projectCategory;renderProjects()});
+    qa('[data-project-page]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.projectPage);if(n>=1&&n<=totalPages){ui.projectPage=n;renderProjects();window.scrollTo({top:q('#projectList')?.offsetTop||0,behavior:'smooth'})}});
     bindProjectRows();
   };
   function taskMatchesTab(t){if(ui.workTab==='done')return isDone(t);if(ui.workTab==='review')return !isDone(t)&&needsReview(t);return !isDone(t)}
@@ -142,7 +162,7 @@ window.updateTaskStatus=async(encodedId,status)=>{
   function setProjectTab(tab){const ids={overview:'projectOverviewPane',files:'projectFilesPane',ai:'projectAiPane'};Object.entries(ids).forEach(([k,id])=>q('#'+id)?.classList.toggle('hidden',k!==tab));qa('[data-project-tab]').forEach(b=>b.classList.toggle('active',b.dataset.projectTab===tab));if(tab==='files')loadFiles()}
 
   function bindV2(){
-    q('#projectSearch')?.addEventListener('input',e=>{ui.projectSearch=e.target.value;renderProjects()});q('#projectCategoryFilter')?.addEventListener('change',e=>{ui.projectCategory=e.target.value;renderProjects()});q('#projectStatusFilter')?.addEventListener('change',e=>{ui.projectStatus=e.target.value;renderProjects()});q('#projectFilterReset')?.addEventListener('click',()=>{ui.projectSearch='';ui.projectCategory='전체';ui.projectStatus='전체';q('#projectSearch').value='';renderProjects()});
+    q('#projectSearch')?.addEventListener('input',e=>{ui.projectSearch=e.target.value;ui.projectPage=1;renderProjects()});q('#projectCategoryFilter')?.addEventListener('change',e=>{ui.projectCategory=e.target.value;ui.projectPage=1;renderProjects()});q('#projectStatusFilter')?.addEventListener('change',e=>{ui.projectStatus=e.target.value;ui.projectPage=1;renderProjects()});q('#projectFilterReset')?.addEventListener('click',()=>{ui.projectSearch='';ui.projectCategory='전체';ui.projectStatus='전체';ui.projectPage=1;q('#projectSearch').value='';renderProjects()});
     q('#taskSearch')?.addEventListener('input',e=>{ui.taskSearch=e.target.value;renderWork()});q('#taskProjectFilter')?.addEventListener('change',e=>{ui.taskProject=e.target.value;renderWork()});q('#taskOwnerFilter')?.addEventListener('change',e=>{ui.taskOwner=e.target.value;renderWork()});q('#taskStatusFilter')?.addEventListener('change',e=>{ui.taskStatus=e.target.value;renderWork()});q('#taskFilterReset')?.addEventListener('click',()=>{ui.taskSearch='';ui.taskProject='전체';ui.taskOwner='전체';ui.taskStatus='전체';q('#taskSearch').value='';renderWork()});
     qa('[data-work-tab]').forEach(b=>b.addEventListener('click',()=>{ui.workTab=b.dataset.workTab;renderWork()}));qa('[data-project-tab]').forEach(b=>b.addEventListener('click',()=>setProjectTab(b.dataset.projectTab)));
     q('#analyzeMemo').onclick=analyzeMemo;q('#registerApproved').onclick=registerApprovedTasks;
