@@ -102,6 +102,33 @@ async function primaryLinkedContext(token,section){
   }
   return {text:chunks.join('\\n').slice(0,120000),sources:used};
 }
+
+function parsePrimaryTasksDeterministic(sectionText){
+  const personNames=new Set(['김기령','강성일','임양성','김규원','백승윤','유하은','정해수','이재원','장재훈','박종현','김태성','태성','강민우','김승종']);
+  const rows=String(sectionText||'').split(/\r?\n/).map((line,i)=>{const m=line.match(/^(\s*)\*\s+(.*)$/);return m?{i,indent:m[1].length,text:clean(m[2])}:null}).filter(Boolean);
+  const tasks=[];let owner='',mode='',modeIndent=-1;const stack=[];
+  const doneRe=/(완료됨|완료\.?$|확인 완료|전달 완료|발송 완료|송부 완료|주문 완료|수령 완료)/;
+  const skipRe=/^(진행사항|계획사항|주간 업무내용|사업본부|개발본부|공지사항|회의실|출장\/외근|휴가)/;
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i],next=rows[i+1],nextIndent=next?next.indent:-1;
+    while(stack.length&&stack[stack.length-1].indent>=r.indent)stack.pop();
+    const base=clean(r.text.split(/[\[(]/)[0]);
+    if(personNames.has(base)){owner=base;mode='';modeIndent=-1;stack.length=0;continue}
+    if(!owner)continue;
+    if(r.text==='진행사항'||r.text==='계획사항'){mode=r.text;modeIndent=r.indent;stack.length=0;continue}
+    if(!mode||r.indent<=modeIndent)continue;
+    if(skipRe.test(r.text))continue;
+    const hasChild=nextIndent>r.indent;
+    if(hasChild){stack.push({indent:r.indent,text:r.text});continue}
+    if(doneRe.test(r.text)&&mode==='진행사항')continue;
+    const parent=stack.length?stack[stack.length-1].text:'';
+    const project=clean(parent.replace(/\s*\(.*?\)\s*/g,' '))||'확인 필요';
+    const title=r.text;
+    if(title.length<3)continue;
+    tasks.push({title,project,owner,dueDate:'',status:mode==='계획사항'?'예정':'진행 중',evidence:`${owner} > ${mode}${parent?' > '+parent:''} > ${title}`,sourceIds:[]});
+  }
+  return dedupePrimaryTasks(tasks);
+}
 function dedupePrimaryTasks(tasks){
   const out=[];
   for(const t of tasks){
@@ -146,9 +173,14 @@ url=https://docs.google.com/document/d/${WORK_DOC_ID}/edit
 
 [LINKED_DRIVE_CONTEXT]
 ${linked.text||'연결 Drive 본문 없음'}`;
-  const ai=await gemini(prompt);
-  let extracted=arr(ai.data?.tasks).map(t=>({title:clean(t.title),project:clean(t.project),owner:clean(t.owner),dueDate:clean(t.dueDate),status:clean(t.status)||'예정',evidence:clean(t.evidence),sourceIds:arr(t.sourceIds).map(clean).filter(x=>x==='main_work_doc'||validIds.has(x))})).filter(t=>t.title&&t.owner);
-  extracted=dedupePrimaryTasks(extracted);
+  let ai=null,extracted=[],fallbackUsed=false,fallbackReason='';
+  try{
+    ai=await gemini(prompt);
+    extracted=arr(ai.data?.tasks).map(t=>({title:clean(t.title),project:clean(t.project),owner:clean(t.owner),dueDate:clean(t.dueDate),status:clean(t.status)||'예정',evidence:clean(t.evidence),sourceIds:arr(t.sourceIds).map(clean).filter(x=>x==='main_work_doc'||validIds.has(x))})).filter(t=>t.title&&t.owner);
+    extracted=dedupePrimaryTasks(extracted);
+  }catch(e){fallbackUsed=true;fallbackReason=String(e?.message||e)}
+  if(!extracted.length){fallbackUsed=true;extracted=parsePrimaryTasksDeterministic(week.text)}
+  if(!extracted.length)return json(res,502,{error:'primary_work_task_extract_empty',week:week.key,fallbackReason});
   const raw=await sheetRows(token,'Tasks','A1:U5000'),existingById=new Map(raw.map(t=>[clean(t.task_id),t])),preserved=raw.filter(t=>clean(t.origin_type)!=='2026년 팀그릿 업무진행'),now=new Date().toISOString(),mainId=sourceId(mainSource)||'main_work_doc';
   const managed=extracted.map(t=>{
     const taskId=taskStableId(week.key,t.owner,t.project,t.title),old=existingById.get(taskId)||{},srcIds=[...new Set([mainId,...t.sourceIds].filter(Boolean))];
@@ -157,7 +189,7 @@ ${linked.text||'연결 Drive 본문 없음'}`;
   const all=[...managed,...preserved],headers=phase2.TASK_HEADERS,last=phase2.TASK_LAST_COL;
   await gf(token,`https://sheets.googleapis.com/v4/spreadsheets/${OPS}/values/${encodeURIComponent(`Tasks!A2:${last}5000`)}:clear`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   if(all.length)await gf(token,`https://sheets.googleapis.com/v4/spreadsheets/${OPS}/values/${encodeURIComponent(`Tasks!A2:${last}${all.length+1}`)}?valueInputOption=RAW`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:all.map(t=>headers.map(h=>t[h]??''))})});
-  return json(res,200,{ok:true,week:week.key,count:managed.length,linkedSourceCount:linked.sources.length,modelUsed:ai.modelUsed,tasks:managed});
+  return json(res,200,{ok:true,week:week.key,count:managed.length,linkedSourceCount:linked.sources.length,modelUsed:ai?.modelUsed||'',fallbackUsed,fallbackReason,tasks:managed});
 }
 
 const RESULT_KINDS=new Set(['auto','email','message','document','spreadsheet','presentation','pdf','research','code','image','design','execution']);
