@@ -140,18 +140,21 @@ function parsePrimaryTasksDeterministic(sectionText){
   return dedupePrimaryTasks(tasks);
 }
 function projectTokens(v=''){return [...new Set(norm(v).split(/[^0-9a-z가-힣]+/).filter(x=>x.length>=2&&!['프로젝트','사업','업무','개발','진행','운영','관련','기타'].includes(x)))]}
-function canonicalProjectName(raw,title,projects){
-  const a=norm(raw),combined=[...projectTokens(raw),...projectTokens(title)];
-  let best='',score=0;
+function canonicalProjectName(raw,_title,projects){
+  const a=norm(raw);if(!a||a==='확인 필요')return '확인 필요';
+  const rt=projectTokens(raw);
+  for(const p of projects||[]){const name=clean(p.name),n=norm(name);if(name&&a===n)return name}
+  let best='',bestScore=0;
   for(const p of projects||[]){
     const name=clean(p.name);if(!name)continue;
-    const n=norm(name);if(a&&a===n)return name;
-    const pt=projectTokens(name);let s=0;
-    for(const t of pt){if(combined.includes(t))s+=3;else if(combined.some(x=>x.includes(t)||t.includes(x)))s+=1}
-    if(a&&(a.includes(n)||n.includes(a)))s+=4;
-    if(s>score){score=s;best=name}
+    const pt=projectTokens(name);
+    const exact=rt.filter(t=>pt.includes(t)).length;
+    const coverage=rt.length?exact/rt.length:0;
+    const containment=(a.includes(norm(name))||norm(name).includes(a))?2:0;
+    const score=exact*2+containment;
+    if(exact>=1&&coverage>=0.6&&score>bestScore){best=name;bestScore=score}
   }
-  return score>=3?best:(clean(raw)||'확인 필요');
+  return best||clean(raw)||'확인 필요';
 }
 function dedupePrimaryTasks(tasks){
   const out=[];
@@ -174,25 +177,25 @@ function dedupePrimaryTasks(tasks){
 async function syncPrimaryTasks(req,res){
   const token=await access(req);if(!token)return json(res,401,{error:'google_not_connected'});
   const main=await readFile(token,{id:WORK_DOC_ID,mimeType:'application/vnd.google-apps.document',name:'2026년 팀그릿 업무진행'});
-  const week=currentWeekSection(main.text||'');
+  const week=recentMonthSection(main.text||'');
   if(!clean(week.text))return json(res,500,{error:'primary_work_section_not_found'});
   const linked=await primaryLinkedContext(token,week.text);
   const sources=await sheetRows(token,'Sources','A1:O5000'),mainSource=sources.find(s=>clean(s.file_id)===WORK_DOC_ID)||{},validIds=new Set(sources.map(sourceId).filter(Boolean));
-  const prompt=`너는 TeamGRIT의 현재 주간 업무를 중앙 Tasks로 동기화하는 에이전트다.
+  const prompt=`너는 TeamGRIT의 최근 30일 업무를 중앙 Tasks로 동기화하는 에이전트다.
 가장 중요한 원칙:
-1. 1차 사실 원본은 반드시 "2026년 팀그릿 업무진행"의 최신 주차다.
-2. 담당자는 업무를 추측해서 배정하지 말고, 주간 업무내용 계층에서 해당 업무를 작성한 가장 가까운 사람 이름을 정확히 사용한다. 예: 김규원 아래 CoBiz 업무면 owner는 김규원이다.
+1. 1차 사실 원본은 반드시 "2026년 팀그릿 업무진행"의 최근 30일 구간이다.
+2. 문서 구조는 보통 "담당자명 → 프로젝트/대분류 → 그 아래 세부 업무"다. 담당자는 반드시 해당 업무가 실제로 적혀 있는 가장 가까운 담당자명으로 지정한다. 다른 사람의 업무를 섞지 않는다.
 3. 연결 Drive 본문은 업무의 세부 내용/프로젝트/근거를 보강하는 용도다. Drive 내용만으로 새로운 담당자를 만들지 않는다.
 4. "진행사항" 중 이미 끝났다고 명시된 항목은 새 처리 업무로 만들지 않는다. 아직 진행 중, 추가 확인, 반영, 테스트, 작성, 전달, 검토 등이 남은 경우만 포함한다.
 5. "계획사항"은 실행 가능한 단위로 포함한다.
 6. 회의/출장 일정은 그 자체를 업무로 만들지 말고, 명시된 준비·확인·후속 조치가 있을 때만 업무로 만든다.
-7. 같은 사람이 같은 프로젝트에서 사실상 같은 작업을 반복해서 쓰면 하나로 합친다.
-8. 프로젝트는 문서의 가까운 프로젝트 소제목(CoBiz, 서울로봇쇼, 당진낙농축협 등)을 우선 사용한다.
+7. 같은 사람이 같은 프로젝트에서 최근 30일 동안 반복해 적은 사실상 동일한 작업은 하나로 합치되, 서로 다른 담당자가 적은 같은 업무는 담당자를 모두 보존한다.
+8. 프로젝트는 반드시 해당 담당자 아래의 프로젝트/대분류 소제목을 사용한다. 프로젝트명이 없는 일반 업무는 억지로 기존 프로젝트에 넣지 말고 "확인 필요"로 둔다.
 9. 기한은 원문에 명시된 경우만 넣고, 없으면 빈 문자열.
 10. sourceIds는 제공된 MAIN_SOURCE 또는 LINKED_DRIVE id만 사용한다.
 JSON만 반환: {"tasks":[{"title":string,"project":string,"owner":string,"dueDate":string,"status":"예정"|"진행 중"|"검토 필요"|"승인 대기"|"보류","evidence":string,"sourceIds":[string]}]}.
 
-[CURRENT_WEEK]
+[RECENT_30_DAY_WORKLOG]
 ${week.text}
 
 [MAIN_SOURCE]
@@ -204,12 +207,19 @@ url=https://docs.google.com/document/d/${WORK_DOC_ID}/edit
 ${linked.text||'연결 Drive 본문 없음'}`;
   const canonicalProjects=await central.list(token,'Projects').catch(()=>[]);
   let ai=null,extracted=[],fallbackUsed=false,fallbackReason='';
+  const deterministic=parsePrimaryTasksDeterministic(week.text);
   try{
     ai=await gemini(prompt);
     extracted=arr(ai.data?.tasks).map(t=>({title:clean(t.title),project:clean(t.project),owner:clean(t.owner),dueDate:clean(t.dueDate),status:clean(t.status)||'예정',evidence:clean(t.evidence),sourceIds:arr(t.sourceIds).map(clean).filter(x=>x==='main_work_doc'||validIds.has(x))})).filter(t=>t.title&&t.owner);
-    extracted=dedupePrimaryTasks(extracted);
   }catch(e){fallbackUsed=true;fallbackReason=String(e?.message||e)}
-  if(!extracted.length){fallbackUsed=true;extracted=parsePrimaryTasksDeterministic(week.text)}
+  if(deterministic.length){
+    const exactKeys=new Set(deterministic.map(t=>norm(t.owner)+'|'+norm(t.project)+'|'+norm(t.title)));
+    const safeAi=extracted.filter(t=>deterministic.some(d=>norm(d.owner)===norm(t.owner)&&norm(d.project)===norm(t.project)&&(taskSimilarity(d.title,t.title)>=.55||norm(d.title).includes(norm(t.title))||norm(t.title).includes(norm(d.title)))));
+    extracted=dedupePrimaryTasks([...deterministic,...safeAi.filter(t=>!exactKeys.has(norm(t.owner)+'|'+norm(t.project)+'|'+norm(t.title)))]);
+  } else {
+    fallbackUsed=true;
+    extracted=dedupePrimaryTasks(extracted);
+  }
   extracted=extracted.map(t=>({...t,project:canonicalProjectName(t.project,t.title,canonicalProjects)}));
   extracted=dedupePrimaryTasks(extracted);
   if(!extracted.length)return json(res,502,{error:'primary_work_task_extract_empty',week:week.key,fallbackReason});
