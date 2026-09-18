@@ -1,8 +1,8 @@
 const crypto=require('crypto');
 const {gemini,clean,arr}=require('./source-corpus-all');
 
-const TASK_HEADERS=['task_id','title','project','owner','due_date','status','source','source_url','source_ids','created_at','approved_at','updated_at','predecessor_task_ids','result_url','result_title','followup_source_task_id','followup_generated_statuses','review_notification_at'];
-const TASK_LAST_COL='R';
+const TASK_HEADERS=['task_id','title','project','owner','due_date','status','source','source_url','source_ids','created_at','approved_at','updated_at','predecessor_task_ids','result_url','result_title','followup_source_task_id','followup_generated_statuses','review_notification_at','origin_type','origin_detail','origin_id'];
+const TASK_LAST_COL='U';
 const TASK_STATUSES=['예정','진행 중','검토 필요','승인 대기','보류','완료'];
 
 function normalizeStatus(v){const s=clean(v);if(!s)return '예정';const map={'진행 전':'예정','검토 대기':'검토 필요','완료됨':'완료'};return TASK_STATUSES.includes(s)?s:(map[s]||'예정')}
